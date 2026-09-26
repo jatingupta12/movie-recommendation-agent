@@ -128,5 +128,6 @@ Python 3.11 validation: `python -m pytest` passed (58 tests); `python -m compile
 - Watchmode lookup warnings now include the sanitized provider error detail while continuing to use unexpired cached availability when available.
 - Recommendation provider defaults to Groq without initializing Claude. Explicit requested genres are checked against TMDB genre metadata and stay enforced during deterministic fallback. Set `AI_RECOMMENDATION_PROVIDER` to `claude`, `auto`, or `deterministic` to change the mode.
 - Recovered 33 zero-byte tracked source, test, and documentation files from the last committed version after the health command failed to import `get_settings`. Preserved the local SQLite database file; `health` initialized it successfully.
+- Removed generated `src/weekend_watch_agent.egg-info/` metadata from version control; setuptools recreates it from `pyproject.toml`, and `.gitignore` excludes it.
 
 Python 3.11 validation after recovery: `python -m weekend_watch.cli health` succeeded, `python -m pytest -q` passed (68 tests), `git diff --check` passed, and `.env` is ignored by Git.

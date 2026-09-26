@@ -1,0 +1,96 @@
+{
+  "name": "Weekend Watch synchronous digest webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "weekend-watch",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a780e4a2-8f39-44ab-bd58-265e2fb3e9ec",
+      "name": "Receive recommendation request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "d89b6e12-d141-4eb0-9d1a-58eecc9bcc5a"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/api/weekend-digest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { request: $json.body?.request ?? 'Recommend what I should watch this weekend.', limit: $json.body?.limit ?? 8 } }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "b745614c-edfe-4bfe-95d7-356d3fa054df",
+      "name": "Generate digest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "953574fb-9868-4d5e-abfe-c7d6efc7408d",
+      "name": "Return digest response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [760, 300]
+    }
+  ],
+  "connections": {
+    "Receive recommendation request": {
+      "main": [
+        [
+          {
+            "node": "Generate digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate digest": {
+      "main": [
+        [
+          {
+            "node": "Return digest response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "3db336c0-9082-4218-81e9-5c8cae3876f6",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

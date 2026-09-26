@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .ai import AIRecommendationService
+from .ai import AIRecommendationService, filter_by_requested_genres
 from .models import WeekendCandidate
 from .pipeline import RecommendationPipeline
 
@@ -57,6 +57,10 @@ class WeekendDigestService:
         total = max(0, min(limit, 50))
         current_date = today or date.today()
         candidates = self.pipeline.get_weekend_candidates(limit=total * 4) if total else []
+        # Apply explicit request constraints before building any section. AI
+        # selection may reorder candidates, but must not allow out-of-genre
+        # titles to reappear through New This Week or Hidden Gems buckets.
+        candidates = filter_by_requested_genres(candidates, request)
         if candidates and self.ai_recommender is not None:
             preferences = self.pipeline.personalization.get_user_preferences()
             reasoning = self.ai_recommender.recommend_candidates(

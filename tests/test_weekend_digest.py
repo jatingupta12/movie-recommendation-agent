@@ -1,6 +1,8 @@
 from datetime import date
 
-from weekend_watch.recommendations.digest import build_weekend_digest, format_weekend_digest
+from weekend_watch.recommendations.digest import (
+    WeekendDigestService, build_weekend_digest, format_weekend_digest,
+)
 from weekend_watch.recommendations.models import WeekendCandidate
 from weekend_watch.tmdb.models import Title
 from weekend_watch.watchmode.models import StreamingAvailability
@@ -92,3 +94,35 @@ def test_digest_markdown_has_all_sections_and_exclusion_notes():
     assert "## 💎 Hidden Gems" in markdown
     assert "Already watched titles are excluded." in markdown
     assert "Titles marked not interested are excluded." in markdown
+
+
+def test_explicit_requested_genre_filters_every_digest_section():
+    class FakePipeline:
+        region = "US"
+
+        def __init__(self, candidates):
+            self.candidates = candidates
+
+        def get_weekend_candidates(self, *, limit):
+            return self.candidates[:limit]
+
+    candidates = [
+        make_candidate(31, "Horror Trend", genres=["Horror"], categories=["TRENDING"]),
+        make_candidate(32, "Comedy Trend", genres=["Comedy"], categories=["TRENDING"]),
+        make_candidate(33, "Horror Release", genres=["Horror"], categories=["NEW_RELEASE"],
+                       release_date="2026-09-23"),
+        make_candidate(34, "Romance Release", genres=["Romance"], categories=["NEW_RELEASE"],
+                       release_date="2026-09-24"),
+        make_candidate(35, "Horror Hidden Gem", genres=["Horror"], categories=["HIDDEN_GEM"]),
+        make_candidate(36, "Drama Hidden Gem", genres=["Drama"], categories=["HIDDEN_GEM"]),
+    ]
+
+    digest = WeekendDigestService(FakePipeline(candidates)).generate(
+        limit=8, today=TODAY, request="Something horror for tonight",
+    )
+    items = digest.recommended + digest.new_this_week + digest.hidden_gems
+
+    assert {item.title for item in items} == {
+        "Horror Trend", "Horror Release", "Horror Hidden Gem",
+    }
+    assert all("Horror" in item.genres for item in items)

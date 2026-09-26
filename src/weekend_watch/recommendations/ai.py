@@ -102,8 +102,8 @@ _REQUEST_GENRES = {
 }
 
 
-def _filter_by_requested_genres(candidates: list[WeekendCandidate], request: str
-                                ) -> list[WeekendCandidate]:
+def filter_by_requested_genres(candidates: list[WeekendCandidate], request: str
+                               ) -> list[WeekendCandidate]:
     """Apply explicit genre constraints against TMDB genres, never model claims."""
     requested: set[str] = set()
     for phrase, genres in _REQUEST_GENRES.items():
@@ -286,7 +286,7 @@ class AIRecommendationService:
         if not candidates:
             return []
         preferences = preferences or self.pipeline.personalization.get_user_preferences()
-        candidates = _filter_by_requested_genres(candidates, request)
+        candidates = filter_by_requested_genres(candidates, request)
         if not candidates:
             return []
         # Groq can select from the structured candidates without calling Claude.

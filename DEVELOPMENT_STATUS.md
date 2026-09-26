@@ -131,5 +131,7 @@ Python 3.11 validation: `python -m pytest` passed (58 tests); `python -m compile
 - Removed generated `src/weekend_watch_agent.egg-info/` metadata from version control; setuptools recreates it from `pyproject.toml`, and `.gitignore` excludes it.
 - Added `ARCHITECTURE.md` describing process startup, shared CLI/API/MCP execution paths, recommendation processing, provider boundaries, and SQLite persistence.
 - Added executable `run-local.sh` to run health and digest, then start the API and MCP processes with Ctrl-C cleanup; documented the stdio limitation for Codex-hosted MCP.
+- Added an importable synchronous n8n webhook workflow that forwards POST requests to the Weekend Watch API and returns the digest response; documented setup and Docker/native URL differences.
+- Enforced explicit request genres across all digest sections before AI selection and section allocation, preventing non-matching titles from re-entering New This Week or Hidden Gems; added a full-section horror regression test.
 
 Python 3.11 validation after recovery: `python -m weekend_watch.cli health` succeeded, `python -m pytest -q` passed (68 tests), `git diff --check` passed, and `.env` is ignored by Git.

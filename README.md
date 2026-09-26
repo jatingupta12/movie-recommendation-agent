@@ -126,6 +126,24 @@ curl -X POST http://127.0.0.1:8000/api/weekend-digest \
 
 The response has `digest` (structured sections/items) and `markdown` fields. In n8n, create a **Schedule Trigger** for Friday afternoon, add an **HTTP Request** node using `POST` and the endpoint above with a JSON body such as `{"limit":8}`, then connect the result to the delivery node you choose and use `{{$json.markdown}}` as its content. This project does not configure email credentials or deploy the API to the cloud.
 
+### Synchronous n8n webhook (request → digest response)
+
+An importable workflow is provided at [`n8n/weekend-watch-request-response.json`](n8n/weekend-watch-request-response.json). In n8n, choose **Workflows → Import from File**, import that JSON, and save it. The workflow is:
+
+```text
+POST Webhook → Weekend Watch API → Respond to Webhook
+```
+
+Send a JSON body with `request` and optional `limit`; n8n waits for digest generation and returns the API's structured `digest` and `markdown` JSON in the webhook response. Example request:
+
+```sh
+curl -X POST http://localhost:5678/webhook/weekend-watch \
+  -H 'Content-Type: application/json' \
+  -d '{"request":"Something horror for tonight","limit":8}'
+```
+
+For testing, click **Listen for test event** in the Webhook node and call the `/webhook-test/weekend-watch` URL. To use the stable `/webhook/weekend-watch` URL, activate the workflow. Both URLs use port `5678` by default. For n8n installed directly with npm, edit the workflow's HTTP Request URL to `http://127.0.0.1:8000/api/weekend-digest`. For Docker on macOS, the imported URL is already set to `http://host.docker.internal:8000/api/weekend-digest`; set `WEEKEND_WATCH_API_HOST=0.0.0.0` in the agent `.env` so the container can reach the API, and keep that listener on a trusted local network. The webhook has no authentication, so keep n8n local and do not expose it publicly.
+
 For n8n running on the same computer, call the local endpoint directly. If n8n runs in a container, `127.0.0.1` points inside that container; on a trusted local network, configure `WEEKEND_WATCH_API_HOST=0.0.0.0` only when needed and use the host address reachable from n8n. `WEEKEND_WATCH_API_HOST` and `WEEKEND_WATCH_API_PORT` control the listener. TMDB credentials are required for fresh discovery; `WATCHMODE_API_KEY` enables live availability refresh, and `ANTHROPIC_API_KEY` / `GROQ_API_KEY` enable the optional AI stages. Missing AI credentials use deterministic recommendations.
 
 ## Tests

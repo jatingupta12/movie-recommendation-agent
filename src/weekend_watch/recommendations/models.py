@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..tmdb.models import Title
 from ..watchmode.models import StreamingAvailability
 
-CandidateCategory = Literal["NEW_RELEASE", "TRENDING", "HIGHLY_RATED", "HIDDEN_GEM"]
+CandidateCategory = Literal["NEW_RELEASE", "TRENDING", "HIGHLY_RATED", "HIDDEN_GEM", "RECOMMENDED", "IN_THEATERS", "KEYWORD_MATCH"]
 
 
 class RecommendationWeights(BaseModel):

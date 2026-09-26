@@ -87,6 +87,32 @@ def test_tv_search_discover_and_release_endpoints():
         http.close()
 
 
+def test_now_playing_and_keyword_search_are_normalized_and_keep_tmdb_params():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        if request.url.path.endswith("/search/keyword"):
+            return httpx.Response(200, json={"results": [{"id": 1234, "name": "horror"}]})
+        return httpx.Response(200, json={"results": [{"id": 8, "title": "A Film",
+            "genre_ids": [27], "original_language": "hi"}]})
+
+    client, http = client_with(handler, api_key="mock")
+    try:
+        film = client.get_now_playing_movies(region="IN").results[0]
+        keywords = client.search_keywords("horror")
+        assert film.title == "A Film" and film.original_language == "hi"
+        assert keywords == [{"id": 1234, "name": "horror"}]
+        assert seen[0].url.path == "/3/movie/now_playing"
+        assert seen[0].url.params["region"] == "IN"
+        keyword_request = next(request for request in seen
+                              if request.url.path == "/3/search/keyword")
+        assert keyword_request.url.params["query"] == "horror"
+    finally:
+        client.close()
+        http.close()
+
+
 def test_retry_transient_server_failure_and_surface_permanent_error():
     calls = 0
 

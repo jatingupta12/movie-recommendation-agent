@@ -17,6 +17,7 @@ from .personalization import PersonalizationService
 from .recommendations.ai import ClaudeClient, GroqClient
 from .recommendations.runtime import build_ai_recommendation_service, build_recommendation_pipeline
 from .recommendations.digest import WeekendDigestService, format_weekend_digest
+from .recommendations.intent import extract_request_intent
 from .repositories import TitleRepository, WatchmodeRepository
 from .tmdb import TmdbClient, TmdbError
 from .tmdb.models import SearchResults, Title
@@ -243,6 +244,9 @@ class WeekendWatchTools:
                            request: str = "Recommend what I should watch this weekend.") -> dict[str, Any]:
         settings = self.settings
         with self._catalog() as (tmdb, db, _titles):
+            intent = extract_request_intent(
+                request, tmdb=tmdb, region=settings.watchmode_region
+            )
             with ExitStack() as stack:
                 pipeline = build_recommendation_pipeline(
                     settings, db, tmdb, stack,
@@ -262,5 +266,6 @@ class WeekendWatchTools:
                     raise RuntimeError(
                         "Watchmode availability lookup failed; check server logs and configuration."
                     ) from None
-        return {"digest": digest.model_dump(mode="json"),
+        return {"intent": intent.model_dump(mode="json"),
+                "digest": digest.model_dump(mode="json"),
                 "markdown": format_weekend_digest(digest)}

@@ -86,6 +86,9 @@ class TmdbClient:
         return min(self.retry_delay * (2 ** attempt), 5.0)
 
     def get_genres(self, media_type: MediaType) -> list[Genre]:
+        if self._genre_cache.get(media_type):
+            return [Genre(id=identifier, name=name)
+                    for identifier, name in self._genre_cache[media_type].items()]
         payload = self._get(f"/genre/{media_type}/list", {"language": "en-US"})
         values = payload.get("genres", [])
         if not isinstance(values, list):
@@ -160,6 +163,19 @@ class TmdbClient:
 
     def get_trending_tv(self, *, time_window: Literal["day", "week"] = "week", page: int = 1) -> SearchResults:
         return self._results("tv", self._get(f"/trending/tv/{time_window}", {"page": page}))
+
+    def get_now_playing_movies(self, *, region: str = "US", page: int = 1) -> SearchResults:
+        """Return TMDB's current theatrical slate for a country/region."""
+        return self._results("movie", self._get("/movie/now_playing", {"region": region, "page": page}))
+
+    def search_keywords(self, query: str, *, page: int = 1) -> list[dict[str, Any]]:
+        """Resolve a user concept to TMDB keyword IDs for Discover filters."""
+        payload = self._get("/search/keyword", {"query": query, "page": page})
+        values = payload.get("results", [])
+        if not isinstance(values, list):
+            raise TmdbError("TMDB returned an unexpected keyword response")
+        return [item for item in values if isinstance(item, dict)
+                and isinstance(item.get("id"), int) and isinstance(item.get("name"), str)]
 
     def discover_movies(self, *, page: int = 1, **filters: Any) -> SearchResults:
         return self._results("movie", self._get("/discover/movie", {"page": page, **filters}))

@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 from typing import Any, Literal
 
 import httpx
@@ -11,6 +10,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ..personalization import UserPreferences
 from .models import Recommendation, WeekendCandidate
 from .pipeline import RecommendationPipeline
+from .request_filters import filter_candidates_by_request
 
 logger = logging.getLogger(__name__)
 
@@ -88,31 +88,6 @@ CLAUDE_SCHEMA = {
     "required": ["recommendations"],
     "additionalProperties": False,
 }
-
-_REQUEST_GENRES = {
-    "action": ("action",), "adventure": ("adventure",),
-    "animation": ("animation",), "comedy": ("comedy",),
-    "crime": ("crime",), "documentary": ("documentary",),
-    "drama": ("drama",), "family": ("family",), "fantasy": ("fantasy",),
-    "history": ("history",), "horror": ("horror",), "scary": ("horror",),
-    "music": ("music",), "mystery": ("mystery",), "romance": ("romance",),
-    "sci-fi": ("science fiction", "sci-fi"),
-    "science fiction": ("science fiction", "sci-fi"),
-    "thriller": ("thriller",), "war": ("war",), "western": ("western",),
-}
-
-
-def filter_by_requested_genres(candidates: list[WeekendCandidate], request: str
-                               ) -> list[WeekendCandidate]:
-    """Apply explicit genre constraints against TMDB genres, never model claims."""
-    requested: set[str] = set()
-    for phrase, genres in _REQUEST_GENRES.items():
-        if re.search(rf"(?<![\w]){re.escape(phrase)}(?![\w])", request.casefold()):
-            requested.update(genres)
-    if not requested:
-        return candidates
-    return [c for c in candidates if requested.intersection(g.casefold() for g in c.title.genres)]
-
 
 class GroqClient:
     """Small Groq chat-completions client using schema-constrained JSON output."""
@@ -270,7 +245,11 @@ class AIRecommendationService:
 
     def recommend(self, *, request: str = "Recommend what I might enjoy this weekend.",
                   limit: int = 10) -> list[Recommendation]:
-        candidates = self.pipeline.get_weekend_candidates(limit=max(limit, 1) * 2)
+        requested_discovery = getattr(self.pipeline, "get_candidates_for_request", None)
+        if requested_discovery:
+            candidates = requested_discovery(request=request, limit=max(limit, 1) * 2)
+        else:
+            candidates = self.pipeline.get_weekend_candidates(limit=max(limit, 1) * 2)
         if not candidates:
             return []
         preferences = self.pipeline.personalization.get_user_preferences()
@@ -286,7 +265,9 @@ class AIRecommendationService:
         if not candidates:
             return []
         preferences = preferences or self.pipeline.personalization.get_user_preferences()
-        candidates = filter_by_requested_genres(candidates, request)
+        candidates = filter_candidates_by_request(
+            candidates, request, region=getattr(self.pipeline, "region", "US")
+        )
         if not candidates:
             return []
         # Groq can select from the structured candidates without calling Claude.
@@ -396,7 +377,7 @@ class AIRecommendationService:
 
 
 def _primary_category(candidate: WeekendCandidate):
-    priority = ("NEW_RELEASE", "TRENDING", "HIGHLY_RATED", "HIDDEN_GEM")
+    priority = ("NEW_RELEASE", "TRENDING", "HIGHLY_RATED", "HIDDEN_GEM", "IN_THEATERS", "RECOMMENDED")
     return next(category for category in priority if category in candidate.categories)
 
 

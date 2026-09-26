@@ -105,6 +105,26 @@ weekend-watch digest --limit 6 --save --digest-dir data/digests
 
 “New This Week” uses the TMDB release/air date and the current Monday-through-today calendar week; titles without a confirming date are not placed there. Ratings and synopsis come from TMDB. Provider names appear only when Watchmode confirms availability for the configured region. The digest always states that watched and not-interested titles were excluded. Saved Markdown uses timestamped filenames in `data/digests/` by default.
 
+## React recommendation chat
+
+The `web/` directory contains a local React chat interface backed by the existing digest API. It shows request/response turns, quick prompt ideas, loading/error feedback, and compact recommendation cards with genres, ratings, synopsis, match reason, and confirmed streaming services. It uses the same backend recommendation pipeline; the browser does not connect directly to TMDB, Watchmode, or AI providers.
+
+Start the API in one terminal from the project root:
+
+```sh
+python -m weekend_watch.api
+```
+
+In another terminal, install and start the frontend development server:
+
+```sh
+cd web
+npm ci
+npm run dev
+```
+
+Open <http://127.0.0.1:5173>. Vite proxies `/health` and `/api` to the local API on port 8000. The chat makes each submitted prompt as a recommendation request and displays its response in the conversation; it does not persist chat history between page reloads.
+
 ## n8n automation API
 
 The local HTTP API exposes the same digest pipeline for workflow automation. It loads saved preferences, discovers and filters candidates (including watched/not-interested exclusions), checks Watchmode availability when configured (or uses cached availability), applies optional Groq/Claude reasoning, then returns the structured digest and Markdown.
@@ -125,6 +145,10 @@ curl -X POST http://127.0.0.1:8000/api/weekend-digest \
 ```
 
 The response has `digest` (structured sections/items) and `markdown` fields. In n8n, create a **Schedule Trigger** for Friday afternoon, add an **HTTP Request** node using `POST` and the endpoint above with a JSON body such as `{"limit":8}`, then connect the result to the delivery node you choose and use `{{$json.markdown}}` as its content. This project does not configure email credentials or deploy the API to the cloud.
+
+The response also includes an `intent` object showing how the request was mapped before discovery (media type, region, TMDB genre IDs, language code, concepts, service names/provider IDs, and OTT/theatrical flags). For example, `show me Hindi horror movies or series on Netflix` is mapped to Hindi (`hi`), the TMDB movie Horror genre where supported, and Netflix's TMDB provider ID in the requested region. The independent theater and OTT sourcing calls can run concurrently. Discover calls use TMDB's `with_watch_monetization_types=flatrate` parameter for subscription catalog results; Watchmode remains the source used to confirm user-facing availability. Theater requests use TMDB's `/movie/now_playing` data and filter the returned factual metadata. TV Horror is sourced through TMDB keyword search because Horror is not part of TMDB's TV genre list; the app does not invent a Horror genre label for those titles. Known concepts include space travel, time loops, enemies to lovers, found family, heists, and dystopian themes, and those are resolved through TMDB keyword discovery when possible.
+
+Region defaults to `US`; common country names/codes can be recognized in a request. Language names map to ISO 639-1 codes for supported languages. The built-in TMDB provider mapping covers Netflix, Prime Video, Max, Disney+, Apple TV+, and Hulu. Other service names are still filtered against Watchmode results, but don't add a TMDB provider filter unless mapped.
 
 ### Synchronous n8n webhook (request → digest response)
 

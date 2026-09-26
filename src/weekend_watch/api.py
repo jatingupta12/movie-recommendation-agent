@@ -7,6 +7,7 @@ from .config import Settings, get_settings
 from .database import connect, initialize_database
 from .mcp_tools import WeekendWatchTools
 from .recommendations.digest import WeekendDigest
+from .recommendations.intent import RecommendationIntent
 
 
 class WeekendDigestRequest(BaseModel):
@@ -17,6 +18,7 @@ class WeekendDigestRequest(BaseModel):
 
 
 class WeekendDigestResponse(BaseModel):
+    intent: RecommendationIntent | None = None
     digest: WeekendDigest
     markdown: str
 

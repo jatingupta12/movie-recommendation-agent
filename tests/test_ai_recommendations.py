@@ -262,3 +262,30 @@ def test_groq_failure_preserves_explicit_genre_guard():
     )
     assert [item.title for item in result] == ["Scary Film"]
     assert result[0].explanation_source == "deterministic"
+
+
+def test_explicit_genre_media_and_streaming_request_filters_factual_candidates():
+    def catalog_candidate(identifier, title, *, media_type, genres, provider, provider_type="subscription",
+                          region="US"):
+        base = candidate(identifier, title)
+        normalized = base.title.model_copy(update={"media_type": media_type, "genres": genres})
+        availability = [StreamingAvailability(
+            title_id=identifier, provider=provider, provider_type=provider_type, region=region,
+        )]
+        return base.model_copy(update={"title": normalized, "streaming_availability": availability})
+
+    candidates = [
+        catalog_candidate(41, "Netflix Horror Series", media_type="tv", genres=["Horror"], provider="Netflix"),
+        catalog_candidate(42, "Other Service Horror", media_type="tv", genres=["Horror"], provider="Hulu"),
+        catalog_candidate(43, "Netflix Horror Movie", media_type="movie", genres=["Horror"], provider="Netflix"),
+        catalog_candidate(44, "Netflix Drama Series", media_type="tv", genres=["Drama"], provider="Netflix"),
+        catalog_candidate(45, "Unconfirmed Netflix Series", media_type="tv", genres=["Horror"],
+                          provider="Netflix", region="CA"),
+        catalog_candidate(46, "Netflix Rental Series", media_type="tv", genres=["Horror"],
+                          provider="Netflix", provider_type="rent"),
+    ]
+    result = AIRecommendationService(FakePipeline(candidates)).recommend(
+        request="Could you recommend something horror series on Netflix?", limit=8,
+    )
+
+    assert [item.title for item in result] == ["Netflix Horror Series"]

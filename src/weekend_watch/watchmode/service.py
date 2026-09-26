@@ -22,13 +22,15 @@ class WatchmodeService:
         self.cache_ttl_hours = cache_ttl_hours
 
     def availability_for_tmdb(self, tmdb_id: int,
-                               media_type: Literal["movie", "tv"] | None = None
+                               media_type: Literal["movie", "tv"] | None = None,
+                               *, region: str | None = None
                                ) -> list[StreamingAvailability]:
+        selected_region = (region or self.region).upper()
         title = self.titles.get_by_provider_external("tmdb", tmdb_id)
         type_changed = bool(title and media_type and title["media_type"] != media_type)
         watchmode_id = self.watchmode.get_mapping(title["id"]) if title and not type_changed else None
         if type_changed:
-            self.watchmode.clear_availability_cache(int(title["id"]), self.region)
+            self.watchmode.clear_availability_cache(int(title["id"]), selected_region)
 
         # Resolve through Watchmode's TMDB search field; these IDs are distinct namespaces.
         if watchmode_id is None:
@@ -52,12 +54,12 @@ class WatchmodeService:
         else:
             title_id = int(title["id"])
 
-        cached = self.watchmode.get_cached_availability(title_id, self.region, self.cache_ttl_hours)
+        cached = self.watchmode.get_cached_availability(title_id, selected_region, self.cache_ttl_hours)
         if cached is not None:
             return [StreamingAvailability.model_validate(dict(row)) for row in cached]
 
         availability = self.client.get_availability(
-            watchmode_id, title_id=title_id, region=self.region
+            watchmode_id, title_id=title_id, region=selected_region
         )
-        self.watchmode.save_availability(title_id, watchmode_id, self.region, availability)
+        self.watchmode.save_availability(title_id, watchmode_id, selected_region, availability)
         return availability

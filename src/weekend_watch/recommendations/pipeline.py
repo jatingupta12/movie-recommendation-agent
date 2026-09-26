@@ -1,6 +1,8 @@
 """Deterministic recommendation candidate discovery, filtering, and scoring."""
 
 import math
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
 from datetime import date, timedelta
 from typing import Any
@@ -11,6 +13,10 @@ from ..tmdb.models import Title
 from ..watchmode.models import StreamingAvailability
 from ..repositories import WatchmodeRepository
 from .models import CandidateCategory, RecommendationWeights, WeekendCandidate
+from .request_filters import filter_candidates_by_request
+from .intent import extract_request_intent
+
+logger = logging.getLogger(__name__)
 
 
 class RecommendationPipeline:
@@ -36,9 +42,15 @@ class RecommendationPipeline:
         self.region = region.upper()
         self.availability_cache_ttl_hours = availability_cache_ttl_hours
 
-    def get_weekend_candidates(self, *, limit: int = 20) -> list[WeekendCandidate]:
+    def get_candidates_for_request(self, *, request: str, limit: int = 20) -> list[WeekendCandidate]:
+        """Discover the general pool plus a genre-targeted pool for explicit asks."""
+        return self.get_weekend_candidates(limit=limit, request=request)
+
+    def get_weekend_candidates(self, *, limit: int = 20,
+                               request: str | None = None) -> list[WeekendCandidate]:
         """Discover sources, filter against the local profile, and rank the survivors."""
         preferences = self.personalization.get_user_preferences()
+        request_intent = extract_request_intent(request, region=self.region) if request else None
         discovered: dict[tuple[str, int], dict[str, Any]] = {}
 
         def add(titles: list[Title], category: CandidateCategory) -> None:
@@ -109,6 +121,90 @@ class RecommendationPipeline:
                     },
                 ).results, "HIDDEN_GEM")
 
+        # Target discovery translates intent into two independent TMDB paths:
+        # theatrical now-playing and OTT/catalog discovery. They share the
+        # thread-safe HTTP client but return data for deterministic merging here.
+        if request:
+            intent = extract_request_intent(request, tmdb=self.tmdb, region=self.region)
+            media_types = ([intent.media_type] if intent.media_type != "both"
+                           else ["movie", "tv"])
+
+            def discover_requested(media_type: str):
+                discover = self.tmdb.discover_movies if media_type == "movie" else self.tmdb.discover_tv
+                filters = intent.tmdb_discover_params(media_type)
+                keyword_ids: list[int] = []
+                # Some concepts have no genre in a media taxonomy (for example,
+                # horror TV). Resolve these to TMDB keywords rather than claiming
+                # they are a genre on the returned title.
+                if intent.genre_names and not intent.genre_ids.get(media_type):
+                    for keyword in intent.genre_names:
+                        try:
+                            rows = self.tmdb.search_keywords(keyword)
+                        except Exception as exc:
+                            logger.warning("TMDB keyword search failed (%s)", type(exc).__name__)
+                            rows = []
+                        exact = [row["id"] for row in rows
+                                 if keyword.casefold() == row["name"].casefold()]
+                        if exact:
+                            keyword_ids.append(exact[0])
+                            break
+                for keyword in intent.keywords:
+                    try:
+                        rows = self.tmdb.search_keywords(keyword)
+                    except Exception as exc:
+                        logger.warning("TMDB keyword search failed (%s)", type(exc).__name__)
+                        rows = []
+                    exact = [row["id"] for row in rows
+                             if keyword.casefold() == row["name"].casefold()]
+                    if exact:
+                        keyword_ids.append(exact[0])
+                keyword_targeted = bool(keyword_ids)
+                if keyword_ids:
+                    # Comma means all requested concepts must be present (AND).
+                    filters["with_keywords"] = ",".join(map(str, keyword_ids))
+                unsupported_genre = bool(intent.genre_names and not intent.genre_ids.get(media_type))
+                if unsupported_genre and not keyword_targeted:
+                    return [], False
+                if not filters and not intent.genre_names:
+                    return [], False
+                return discover(page=1, sort_by="popularity.desc", **filters).results, keyword_targeted
+
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                theater_future = None
+                if intent.theatrical and preferences.movies_enabled and intent.media_type != "tv":
+                    theater_future = executor.submit(
+                        self.tmdb.get_now_playing_movies, region=intent.region
+                    )
+                discovery_futures = {
+                    media_type: executor.submit(discover_requested, media_type)
+                    for media_type in media_types
+                    if (media_type == "movie" and preferences.movies_enabled)
+                    or (media_type == "tv" and preferences.tv_enabled)
+                }
+                # A failure in one sourcing branch must not discard results from
+                # the other branch. Provider failures are logged without payloads.
+                if theater_future is not None:
+                    try:
+                        now_playing = theater_future.result().results
+                        requested = set(intent.genre_names)
+                        for title in now_playing:
+                            if requested and not requested.intersection(g.casefold() for g in title.genres):
+                                continue
+                            if intent.language_code and title.original_language != intent.language_code:
+                                continue
+                            add([title], "IN_THEATERS")
+                    except Exception as exc:
+                        logger.warning("TMDB now-playing lookup failed (%s)", type(exc).__name__)
+                for media_type, future in discovery_futures.items():
+                    try:
+                        targeted_titles, keyword_targeted = future.result()
+                    except Exception as exc:
+                        logger.warning("TMDB %s request discovery failed (%s)", media_type, type(exc).__name__)
+                        continue
+                    add(targeted_titles, "RECOMMENDED")
+                    if keyword_targeted:
+                        for title in targeted_titles:
+                            discovered[("tmdb", title.tmdb_id)]["categories"].add("KEYWORD_MATCH")
         results = []
         for item in discovered.values():
             title: Title = item["title"]
@@ -118,7 +214,7 @@ class RecommendationPipeline:
             categories = set(categories)
             if title.rating is None or title.rating < 7.0 or title.vote_count < self.minimum_votes:
                 categories.discard("HIGHLY_RATED")
-            availability = self._availability(title)
+            availability = self._availability(title, request_intent.region if request_intent else self.region)
             excluded_services = {service.casefold() for service in preferences.excluded_streaming_services}
             availability = [item for item in availability if item.provider.casefold() not in excluded_services]
             if not self._matches_streaming_preferences(availability, preferences):
@@ -137,6 +233,10 @@ class RecommendationPipeline:
                 streaming_availability=availability,
                 reasons=reasons,
             ))
+        if request:
+            results = filter_candidates_by_request(
+                results, request, region=request_intent.region if request_intent else self.region
+            )
         results.sort(key=lambda candidate: (-candidate.match_score, candidate.title.title.casefold(), candidate.title.tmdb_id))
         return results[:max(0, limit)]
 
@@ -165,16 +265,21 @@ class RecommendationPipeline:
             return False
         return True
 
-    def _availability(self, title: Title) -> list[StreamingAvailability]:
+    def _availability(self, title: Title, region: str | None = None) -> list[StreamingAvailability]:
+        selected_region = (region or self.region).upper()
         if self.availability_lookup:
-            return self.availability_lookup(title)
+            try:
+                return self.availability_lookup(title, selected_region)
+            except TypeError:
+                # Backward compatibility for simple injected lookups used by callers/tests.
+                return self.availability_lookup(title)
         if self.watchmode is None:
             return []
         local = self.personalization.titles.get_by_provider_external("tmdb", title.tmdb_id)
         if local is None:
             return []
         rows = self.watchmode.get_cached_availability(
-            int(local["id"]), self.region, self.availability_cache_ttl_hours
+            int(local["id"]), selected_region, self.availability_cache_ttl_hours
         )
         return [StreamingAvailability.model_validate(dict(row)) for row in rows or []]
 
@@ -249,6 +354,8 @@ class RecommendationPipeline:
             reasons.append(f"Rated {title.rating:.1f}/10 by {title.vote_count:,} voters")
         if "HIDDEN_GEM" in categories:
             reasons.append("Strong genre match with lower popularity")
+        if "IN_THEATERS" in categories:
+            reasons.append("Currently listed in theaters by TMDB")
         if breakdown["genre_match"] > 0:
             reasons.append("Matches preferred genres")
         if availability:

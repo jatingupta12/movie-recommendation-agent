@@ -133,5 +133,19 @@ Python 3.11 validation: `python -m pytest` passed (58 tests); `python -m compile
 - Added executable `run-local.sh` to run health and digest, then start the API and MCP processes with Ctrl-C cleanup; documented the stdio limitation for Codex-hosted MCP.
 - Added an importable synchronous n8n webhook workflow that forwards POST requests to the Weekend Watch API and returns the digest response; documented setup and Docker/native URL differences.
 - Enforced explicit request genres across all digest sections before AI selection and section allocation, preventing non-matching titles from re-entering New This Week or Hidden Gems; added a full-section horror regression test.
+- Added a local React/Vite recommendation chat with quick prompts, responsive conversation layout, loading/error states, recommendation cards, API health status, and a Vite proxy to the existing digest API.
+- Explicit requests now trigger genre-targeted TMDB discovery before filtering, then constrain genre/media type from TMDB facts and named services from confirmed regional Watchmode availability; added regression tests for finding horror TV and enforcing Netflix across digest/direct recommendation paths.
 
 Python 3.11 validation after recovery: `python -m weekend_watch.cli health` succeeded, `python -m pytest -q` passed (68 tests), `git diff --check` passed, and `.env` is ignored by Git.
+
+## Natural-language sourcing intent and TMDB pipelines
+
+Added a typed `RecommendationIntent` parsed from explicit chat/API requests. It captures movie/TV/both, recognized country/region (US by default), requested TMDB genres and IDs, supported language names and ISO 639-1 codes, named streaming services and the supplied TMDB provider IDs, OTT/theatrical intent, and explicit concept phrases. The API response now includes this structured intent next to its digest and Markdown; it does not expose chain-of-thought.
+
+Request-driven TMDB discovery now passes `watch_region`, pipe-separated `with_watch_providers` (OR), comma-separated `with_genres` (AND), `with_original_language`, and `with_watch_monetization_types=flatrate` where those request constraints exist. Watchmode continues to verify regional availability before the app claims a service. Requests that explicitly ask for titles in theaters use `/movie/now_playing?region=...` and post-filter by requested genre/language. Search-keyword discovery supports concepts and TV horror (TMDB TV genres do not include Horror); keyword matches are marked internally and do not alter the factual genre list. Genre lists are cached per TMDB client.
+
+Added mocked tests for Hindi + horror + Netflix/Prime request mapping, language/region extraction, OR/AND provider and genre parameters, TV horror keyword discovery, theatrical titles, and TMDB endpoint parameterization. Validation on Python 3.11: `.venv/bin/python -m pytest -q` passed (78 tests); `.venv/bin/python -m compileall -q src` passed; `git diff --check` passed.
+
+## Digest display ordering
+
+Weekend digest sections now display selected titles by release year descending, with titles missing a valid release date after dated titles. Relevance-based selection is retained, and stable ordering preserves the existing relevance order for titles from the same year. Since the chat renders these API digest sections, its cards follow the same order. Validation: `.venv/bin/python -m pytest -q` passed (79 tests); `git diff --check` passed.

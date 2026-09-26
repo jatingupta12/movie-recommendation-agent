@@ -36,10 +36,13 @@ def build_recommendation_pipeline(settings, db: sqlite3.Connection, tmdb: TmdbCl
             cache_ttl_hours=settings.watchmode_cache_ttl_hours,
         )
 
-        def availability_lookup(title: Title):
+        def availability_lookup(title: Title, region: str | None = None):
+            selected_region = (region or settings.watchmode_region).upper()
             local_id = titles.upsert(**title.to_repository_fields())
             try:
-                return watchmode_service.availability_for_tmdb(title.tmdb_id, title.media_type)
+                return watchmode_service.availability_for_tmdb(
+                    title.tmdb_id, title.media_type, region=selected_region
+                )
             except WatchmodeTitleNotFound:
                 logger.info("Watchmode has no mapping for TMDB title %s", title.tmdb_id)
                 return []
@@ -49,7 +52,7 @@ def build_recommendation_pipeline(settings, db: sqlite3.Connection, tmdb: TmdbCl
                     title.tmdb_id, str(exc),
                 )
                 cached = watchmode_repository.get_cached_availability(
-                    local_id, settings.watchmode_region, ttl_hours=settings.watchmode_cache_ttl_hours
+                    local_id, selected_region, ttl_hours=settings.watchmode_cache_ttl_hours
                 )
                 return [StreamingAvailability.model_validate(dict(row)) for row in cached or []]
 

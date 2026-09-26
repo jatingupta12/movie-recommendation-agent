@@ -50,6 +50,21 @@ def test_digest_uses_calendar_week_date_and_categorizes_unique_titles():
     ) for item in group}) == digest.total_titles
 
 
+def test_digest_displays_each_section_by_release_year_descending_and_undated_last():
+    candidates = [
+        make_candidate(11, "Older", release_date="2021-01-01"),
+        make_candidate(12, "Newest", release_date="2025-05-01"),
+        make_candidate(13, "Undated", release_date=None),
+        make_candidate(14, "Middle", release_date="2023-08-15"),
+    ]
+
+    digest = build_weekend_digest(candidates, limit=10, today=TODAY)
+
+    assert [item.title for item in digest.recommended] == [
+        "Newest", "Middle", "Older", "Undated",
+    ]
+
+
 def test_digest_never_invents_provider_rating_or_synopsis():
     title = make_candidate(
         10, "Incomplete Data", rating=None, release_date=None, overview="",
@@ -126,3 +141,44 @@ def test_explicit_requested_genre_filters_every_digest_section():
         "Horror Trend", "Horror Release", "Horror Hidden Gem",
     }
     assert all("Horror" in item.genres for item in items)
+
+
+def test_digest_requires_requested_series_and_confirmed_streaming_service():
+    class FakePipeline:
+        region = "US"
+
+        def __init__(self, candidates):
+            self.candidates = candidates
+
+        def get_weekend_candidates(self, *, limit):
+            return self.candidates[:limit]
+
+    def streaming_title(identifier, name, *, media_type, genres, provider, provider_type="subscription",
+                        region="US", category="TRENDING", release_date=None):
+        item = make_candidate(identifier, name, categories=[category], release_date=release_date, genres=genres)
+        return item.model_copy(update={
+            "title": item.title.model_copy(update={"media_type": media_type}),
+            "streaming_availability": [StreamingAvailability(
+                title_id=identifier, provider=provider, provider_type=provider_type, region=region,
+            )],
+        })
+
+    candidates = [
+        streaming_title(41, "Netflix Horror Series", media_type="tv", genres=["Horror"], provider="Netflix"),
+        streaming_title(42, "Hulu Horror Series", media_type="tv", genres=["Horror"], provider="Hulu"),
+        streaming_title(43, "Netflix Horror Movie", media_type="movie", genres=["Horror"], provider="Netflix"),
+        streaming_title(44, "Netflix Drama Series", media_type="tv", genres=["Drama"], provider="Netflix"),
+        streaming_title(45, "Netflix Horror New Show", media_type="tv", genres=["Horror"], provider="Netflix",
+                        category="NEW_RELEASE", release_date="2026-09-23"),
+        streaming_title(46, "Netflix Horror Rent", media_type="tv", genres=["Horror"], provider="Netflix",
+                        provider_type="rent"),
+    ]
+    digest = WeekendDigestService(FakePipeline(candidates)).generate(
+        limit=8, today=TODAY, request="Could you recommend something horror series on Netflix?",
+    )
+    items = digest.recommended + digest.new_this_week + digest.hidden_gems
+
+    assert {item.title for item in items} == {"Netflix Horror Series", "Netflix Horror New Show"}
+    assert all(item.media_type == "tv" for item in items)
+    assert all("Horror" in item.genres for item in items)
+    assert all(item.streaming_services == ["Netflix"] for item in items)

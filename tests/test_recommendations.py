@@ -8,7 +8,7 @@ from weekend_watch.database import connect, initialize_database
 from weekend_watch.personalization import PersonalizationService, UserPreferences
 from weekend_watch.repositories import WatchmodeRepository
 from weekend_watch.recommendations import RecommendationPipeline, RecommendationWeights
-from weekend_watch.tmdb.models import SearchResults, Title
+from weekend_watch.tmdb.models import Genre, SearchResults, Title
 from weekend_watch.watchmode.models import StreamingAvailability
 from weekend_watch.watchmode import WatchmodeError
 from weekend_watch.recommendations.runtime import build_recommendation_pipeline
@@ -142,6 +142,103 @@ def test_media_type_preferences_disable_tv_candidates(context):
     candidates = pipeline_for(service, tmdb).get_weekend_candidates()
     assert all(item.title.media_type == "movie" for item in candidates)
     assert "trending_tv" not in tmdb.calls and "high_tv" not in tmdb.calls
+
+
+def test_explicit_request_discovers_requested_genre_instead_of_filtering_only_broad_shortlist(context):
+    _, service = context
+    service.update_user_preferences(UserPreferences(
+        trending_enabled=False, new_releases_enabled=False, hidden_gems_enabled=False,
+    ))
+    horror_series = title(32, "Horror Series", media_type="tv", genres=["Horror"])
+    broad_drama = title(33, "Popular Drama", media_type="tv", genres=["Drama"])
+
+    class GenreAwareTmdb(FakeTmdb):
+        def get_genres(self, media_type):
+            assert media_type == "tv"
+            return [Genre(id=27, name="Horror"), Genre(id=18, name="Drama")]
+
+        def discover_tv(self, **filters):
+            if "with_genres" in filters:
+                self.calls.append(("requested_genre_tv", filters["with_genres"]))
+                return self.results([horror_series])
+            return super().discover_tv(**filters)
+
+    tmdb = GenreAwareTmdb(high_tv=[broad_drama])
+    pipeline = pipeline_for(
+        service, tmdb,
+        availability_lookup=lambda item: [StreamingAvailability(
+            title_id=item.tmdb_id, provider="Netflix", provider_type="subscription", region="US",
+        )],
+    )
+    candidates = pipeline.get_candidates_for_request(
+        request="Could you recommend a horror series?", limit=8,
+    )
+
+    assert [candidate.title.title for candidate in candidates] == ["Horror Series"]
+    assert ("requested_genre_tv", "27") in tmdb.calls
+
+
+def test_tv_horror_uses_tmdb_keywords_and_provider_discovery(context):
+    _, service = context
+    service.update_user_preferences(
+        UserPreferences(trending_enabled=False, new_releases_enabled=False, hidden_gems_enabled=False)
+    )
+    show = title(34, "Horror show", media_type="tv", genres=["Drama"], language="en")
+
+    class KeywordTmdb(FakeTmdb):
+        def get_genres(self, media_type):
+            return [Genre(id=18, name="Drama")]
+
+        def search_keywords(self, query):
+            assert query == "horror"
+            return [{"id": 777, "name": "horror"}]
+
+        def discover_tv(self, **filters):
+            self.calls.append(filters)
+            return self.results([show])
+
+    tmdb = KeywordTmdb(high_tv=[])
+    pipeline = pipeline_for(
+        service, tmdb,
+        availability_lookup=lambda _title, _region: [StreamingAvailability(
+            title_id=34, provider="Netflix", provider_type="subscription", region="US",
+        )],
+    )
+    candidates = pipeline.get_candidates_for_request(
+        request="Recommend horror series on Netflix", limit=8,
+    )
+
+    assert len(candidates) == 1
+    assert "Horror" not in candidates[0].title.genres
+    assert "KEYWORD_MATCH" in candidates[0].categories
+    targeted = [call for call in tmdb.calls if isinstance(call, dict)][-1]
+    assert targeted["with_keywords"] == "777"
+    assert targeted["with_watch_providers"] == "8"
+    assert targeted["with_watch_monetization_types"] == "flatrate"
+
+
+def test_theatrical_request_uses_country_now_playing_and_marks_category(context):
+    _, service = context
+    service.update_user_preferences(
+        UserPreferences(trending_enabled=False, new_releases_enabled=False,
+                        hidden_gems_enabled=False, tv_enabled=False)
+    )
+    film = title(35, "Indian horror", genres=["Horror"], language="hi")
+
+    class TheaterTmdb(FakeTmdb):
+        def get_genres(self, media_type):
+            return [Genre(id=27, name="Horror")]
+
+        def get_now_playing_movies(self, *, region, page=1):
+            assert region == "IN"
+            return self.results([film])
+
+    tmdb = TheaterTmdb()
+    candidates = pipeline_for(service, tmdb).get_candidates_for_request(
+        request="Hindi horror movie in theaters in India", limit=8,
+    )
+    assert [item.title.tmdb_id for item in candidates] == [35]
+    assert "IN_THEATERS" in candidates[0].categories
 
 
 def test_hidden_gem_favors_low_popularity_and_strong_preference_match(context):

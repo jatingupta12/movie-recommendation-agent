@@ -8,5 +8,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+web/node_modules/
+web/dist/
 data/*.db-shm
 data/*.db-wal

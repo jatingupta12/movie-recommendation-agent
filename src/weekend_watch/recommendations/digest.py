@@ -5,11 +5,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .ai import AIRecommendationService, filter_by_requested_genres
+from .ai import AIRecommendationService
+from .request_filters import filter_candidates_by_request
 from .models import WeekendCandidate
 from .pipeline import RecommendationPipeline
 
-DigestCategory = Literal["RECOMMENDED", "TRENDING", "HIGHLY_RATED", "NEW_THIS_WEEK", "HIDDEN_GEM"]
+DigestCategory = Literal["RECOMMENDED", "TRENDING", "HIGHLY_RATED", "NEW_THIS_WEEK", "HIDDEN_GEM", "IN_THEATERS"]
 DigestSectionName = Literal["recommended", "new_this_week", "hidden_gems"]
 
 
@@ -56,11 +57,19 @@ class WeekendDigestService:
                  request: str = "Recommend what I should watch this weekend.") -> WeekendDigest:
         total = max(0, min(limit, 50))
         current_date = today or date.today()
-        candidates = self.pipeline.get_weekend_candidates(limit=total * 4) if total else []
-        # Apply explicit request constraints before building any section. AI
-        # selection may reorder candidates, but must not allow out-of-genre
-        # titles to reappear through New This Week or Hidden Gems buckets.
-        candidates = filter_by_requested_genres(candidates, request)
+        if not total:
+            candidates = []
+        else:
+            request_discovery = getattr(self.pipeline, "get_candidates_for_request", None)
+            if request_discovery:
+                candidates = request_discovery(request=request, limit=total * 4)
+            else:
+                candidates = self.pipeline.get_weekend_candidates(limit=total * 4)
+        # Apply explicit request constraints before AI or section allocation,
+        # so other digest buckets cannot reintroduce mismatched titles.
+        candidates = filter_candidates_by_request(
+            candidates, request, region=getattr(self.pipeline, "region", "US")
+        )
         if candidates and self.ai_recommender is not None:
             preferences = self.pipeline.personalization.get_user_preferences()
             reasoning = self.ai_recommender.recommend_candidates(
@@ -136,6 +145,11 @@ def build_weekend_digest(candidates: list[WeekendCandidate], *, limit: int = 8,
             selected_ids.add(identifier)
             remaining -= 1
 
+    # Keep relevance-based candidate selection, then present each digest section
+    # newest year first. Stable sorting preserves relevance order within a year.
+    for entries in selected.values():
+        entries.sort(key=_release_year_sort_key, reverse=True)
+
     return WeekendDigest(
         generated_on=current_date,
         recommended=[_to_item(item, "recommended", current_date, region, reasons_by_id) for item in selected["recommended"]],
@@ -155,6 +169,16 @@ def _released_this_week(candidate: WeekendCandidate, week_start: date, today: da
     return week_start <= parsed <= today
 
 
+def _release_year_sort_key(candidate: WeekendCandidate) -> tuple[bool, int]:
+    release_date = candidate.title.release_date
+    if release_date:
+        try:
+            return True, int(date.fromisoformat(release_date[:10]).year)
+        except ValueError:
+            pass
+    return False, 0
+
+
 def _to_item(candidate: WeekendCandidate, section: DigestSectionName,
              today: date, region: str, reasons_by_id: dict[int, object] | None = None
              ) -> WeekendDigestItem:
@@ -167,6 +191,8 @@ def _to_item(candidate: WeekendCandidate, section: DigestSectionName,
         category: DigestCategory = "NEW_THIS_WEEK"
     elif section == "hidden_gems":
         category = "HIDDEN_GEM"
+    elif "IN_THEATERS" in candidate.categories:
+        category = "IN_THEATERS"
     elif "TRENDING" in candidate.categories:
         category = "TRENDING"
     elif "HIGHLY_RATED" in candidate.categories:

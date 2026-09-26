@@ -1,0 +1,2 @@
+[console_scripts]
+weekend-watch = weekend_watch.cli:main

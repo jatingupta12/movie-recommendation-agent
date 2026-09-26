@@ -2,6 +2,8 @@
 
 A personal, local-first movie and TV recommendation agent. It provides SQLite persistence, TMDB metadata, Watchmode streaming availability, deterministic candidate discovery, optional Groq/Claude recommendation reasoning, and an MCP server for Codex and other local MCP clients.
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the CLI, API, and MCP execution flows and the shared recommendation pipeline.
+
 ## Requirements and setup
 
 - Python 3.11 or newer
@@ -28,6 +30,14 @@ python -m weekend_watch.cli digest
 ```
 
 The health command works without TMDB credentials. Generating a fresh digest requires TMDB credentials.
+
+To run health, generate a digest, and then start the local API and MCP processes together, run:
+
+```sh
+./run-local.sh
+```
+
+The script uses `.venv/bin/python` when available, otherwise `python3`; press Ctrl-C to stop both services. The MCP server uses stdio, so Codex normally launches its own MCP process from its MCP configuration rather than connecting to the background process started by this helper. The helper starts it as requested, but that instance is not a substitute for Codex's configured stdio connection.
 
 If Claude is missing or unavailable, recommendations fall back to the deterministic pipeline. If Groq is missing or unavailable, Claude receives the complete deterministic candidate set. AI never supplies factual title details: normalized metadata comes from TMDB and confirmed streaming availability comes from Watchmode. Structured recommendations label these sources separately from Claude-assisted or deterministic explanation text. The app renders concise explanations from validated reason codes and structured facts instead of accepting model-written factual claims.
 

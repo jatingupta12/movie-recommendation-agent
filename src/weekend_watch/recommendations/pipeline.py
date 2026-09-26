@@ -50,7 +50,14 @@ class RecommendationPipeline:
                                request: str | None = None) -> list[WeekendCandidate]:
         """Discover sources, filter against the local profile, and rank the survivors."""
         preferences = self.personalization.get_user_preferences()
-        request_intent = extract_request_intent(request, region=self.region) if request else None
+        request_intent = (extract_request_intent(request, tmdb=self.tmdb, region=self.region)
+                          if request else None)
+        explicit_request = bool(request_intent and (
+            request_intent.genre_names or request_intent.person_names
+            or request_intent.language_code or request_intent.streaming_services
+            or request_intent.media_type != "both" or request_intent.keywords
+            or request_intent.theatrical
+        ))
         discovered: dict[tuple[str, int], dict[str, Any]] = {}
 
         def add(titles: list[Title], category: CandidateCategory) -> None:
@@ -66,66 +73,67 @@ class RecommendationPipeline:
         date_floor = (today - timedelta(days=self.new_release_days)).isoformat()
         date_ceiling = today.isoformat()
 
-        if preferences.trending_enabled:
-            if preferences.movies_enabled:
-                add(self.tmdb.get_trending_movies().results, "TRENDING")
-            if preferences.tv_enabled:
-                add(self.tmdb.get_trending_tv().results, "TRENDING")
+        if not explicit_request:
+            if preferences.trending_enabled:
+                if preferences.movies_enabled:
+                    add(self.tmdb.get_trending_movies().results, "TRENDING")
+                if preferences.tv_enabled:
+                    add(self.tmdb.get_trending_tv().results, "TRENDING")
 
-        if preferences.new_releases_enabled:
-            if preferences.movies_enabled:
-                add(self.tmdb.discover_movies(
-                    page=1, **{"primary_release_date.gte": date_floor,
-                              "primary_release_date.lte": date_ceiling,
-                              "sort_by": "primary_release_date.desc"},
-                ).results, "NEW_RELEASE")
-            if preferences.tv_enabled:
-                add(self.tmdb.discover_tv(
-                    page=1, **{"first_air_date.gte": date_floor,
-                              "first_air_date.lte": date_ceiling,
-                              "sort_by": "first_air_date.desc"},
-                ).results, "NEW_RELEASE")
+            if preferences.new_releases_enabled:
+                if preferences.movies_enabled:
+                    add(self.tmdb.discover_movies(
+                        page=1, **{"primary_release_date.gte": date_floor,
+                                  "primary_release_date.lte": date_ceiling,
+                                  "sort_by": "primary_release_date.desc"},
+                    ).results, "NEW_RELEASE")
+                if preferences.tv_enabled:
+                    add(self.tmdb.discover_tv(
+                        page=1, **{"first_air_date.gte": date_floor,
+                                  "first_air_date.lte": date_ceiling,
+                                  "sort_by": "first_air_date.desc"},
+                    ).results, "NEW_RELEASE")
 
-        rating_floor = max(preferences.minimum_rating, 7.0)
-        if preferences.movies_enabled:
-            add(self.tmdb.discover_movies(
-                page=1, sort_by="vote_average.desc", **{
-                    "vote_average.gte": rating_floor,
-                    "vote_count.gte": self.minimum_votes,
-                },
-            ).results, "HIGHLY_RATED")
-        if preferences.tv_enabled:
-            add(self.tmdb.discover_tv(
-                page=1, sort_by="vote_average.desc", **{
-                    "vote_average.gte": rating_floor,
-                    "vote_count.gte": self.minimum_votes,
-                },
-            ).results, "HIGHLY_RATED")
-
-        if preferences.hidden_gems_enabled:
-            hidden_floor = max(preferences.minimum_rating, 7.0)
+            rating_floor = max(preferences.minimum_rating, 7.0)
             if preferences.movies_enabled:
                 add(self.tmdb.discover_movies(
                     page=1, sort_by="vote_average.desc", **{
-                        "vote_average.gte": hidden_floor,
-                        "vote_count.gte": self.hidden_gem_min_votes,
-                        "vote_count.lte": self.hidden_gem_max_votes,
+                        "vote_average.gte": rating_floor,
+                        "vote_count.gte": self.minimum_votes,
                     },
-                ).results, "HIDDEN_GEM")
+                ).results, "HIGHLY_RATED")
             if preferences.tv_enabled:
                 add(self.tmdb.discover_tv(
                     page=1, sort_by="vote_average.desc", **{
-                        "vote_average.gte": hidden_floor,
-                        "vote_count.gte": self.hidden_gem_min_votes,
-                        "vote_count.lte": self.hidden_gem_max_votes,
+                        "vote_average.gte": rating_floor,
+                        "vote_count.gte": self.minimum_votes,
                     },
-                ).results, "HIDDEN_GEM")
+                ).results, "HIGHLY_RATED")
+
+            if preferences.hidden_gems_enabled:
+                hidden_floor = max(preferences.minimum_rating, 7.0)
+                if preferences.movies_enabled:
+                    add(self.tmdb.discover_movies(
+                        page=1, sort_by="vote_average.desc", **{
+                            "vote_average.gte": hidden_floor,
+                            "vote_count.gte": self.hidden_gem_min_votes,
+                            "vote_count.lte": self.hidden_gem_max_votes,
+                        },
+                    ).results, "HIDDEN_GEM")
+                if preferences.tv_enabled:
+                    add(self.tmdb.discover_tv(
+                        page=1, sort_by="vote_average.desc", **{
+                            "vote_average.gte": hidden_floor,
+                            "vote_count.gte": self.hidden_gem_min_votes,
+                            "vote_count.lte": self.hidden_gem_max_votes,
+                        },
+                    ).results, "HIDDEN_GEM")
 
         # Target discovery translates intent into two independent TMDB paths:
         # theatrical now-playing and OTT/catalog discovery. They share the
         # thread-safe HTTP client but return data for deterministic merging here.
         if request:
-            intent = extract_request_intent(request, tmdb=self.tmdb, region=self.region)
+            intent = request_intent
             media_types = ([intent.media_type] if intent.media_type != "both"
                            else ["movie", "tv"])
 
@@ -210,6 +218,31 @@ class RecommendationPipeline:
                     if intent.person_ids:
                         for title in targeted_titles:
                             discovered[("tmdb", title.tmdb_id)]["categories"].add("ACTOR_MATCH")
+        if request and discovered:
+            preliminary = [WeekendCandidate(
+                title=item["title"], categories=sorted(item["categories"]),
+                match_score=0, score_breakdown={},
+            ) for item in discovered.values()]
+            allowed_ids = {
+                item.title.tmdb_id for item in filter_candidates_by_request(
+                    preliminary, request, region=request_intent.region,
+                    require_streaming_match=False,
+                )
+            }
+            discovered = {key: item for key, item in discovered.items()
+                          if item["title"].tmdb_id in allowed_ids}
+            # The caller's output budget already accounts for digest/AI overfetch.
+            # Cap availability refreshes at that budget for explicit requests.
+            if limit <= 0:
+                discovered = {}
+            else:
+                availability_budget = min(limit, max(8, limit // 2))
+                if len(discovered) > availability_budget:
+                    ranked = sorted(discovered.values(), key=lambda item: (
+                        -(item["title"].popularity or 0),
+                        -(item["title"].rating or 0), item["title"].title.casefold(),
+                    ))[:availability_budget]
+                    discovered = {("tmdb", item["title"].tmdb_id): item for item in ranked}
         results = []
         for item in discovered.values():
             title: Title = item["title"]

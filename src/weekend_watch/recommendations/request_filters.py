@@ -74,13 +74,24 @@ def requested_media_type(request: str) -> str | None:
 def requested_people(request: str) -> list[str]:
     """Extract names explicitly introduced as requested cast members."""
     match = re.search(r"\b(?:starring|cast with)\s+(.+)$", request, re.IGNORECASE)
-    if not match:
-        return []
+    if match:
+        name = match.group(1)
+    else:
+        # Common conversational form: “suggest a Tom Cruise movie”.
+        match = re.search(
+            r"\b(?:suggest|recommend|show me|find me|give me)\s+"
+            r"(?:(?:a|an|some|any)\s+)?(.+?)\s+"
+            r"(?:movie|movies|film|films|series|show|shows)\b",
+            request, re.IGNORECASE,
+        )
+        if not match:
+            return []
+        name = match.group(1)
     name = re.split(
         r"\b(?:on|in|for|tonight|please|movie|movies|film|films|series|show|shows|tv|"
         r"streaming|who|that|this weekend|action|adventure|animation|comedy|crime|"
         r"documentary|drama|family|fantasy|horror|mystery|romance|thriller|western|and)\b",
-        match.group(1), maxsplit=1, flags=re.IGNORECASE,
+        name, maxsplit=1, flags=re.IGNORECASE,
     )[0]
     words = re.findall(r"[A-Za-z][A-Za-z.'-]*", name)
     if len(words) < 2:
@@ -89,7 +100,8 @@ def requested_people(request: str) -> list[str]:
 
 
 def filter_candidates_by_request(candidates: list[WeekendCandidate], request: str, *,
-                                 region: str = "US") -> list[WeekendCandidate]:
+                                 region: str = "US",
+                                 require_streaming_match: bool = True) -> list[WeekendCandidate]:
     """Apply explicit genre, media, and streaming constraints to factual data."""
     genres = requested_genres(request)
     media_type = requested_media_type(request)
@@ -136,17 +148,18 @@ def filter_candidates_by_request(candidates: list[WeekendCandidate], request: st
             continue
         if requested_language and (candidate.title.original_language or "").casefold() != requested_language:
             continue
-        available = [item for item in candidate.streaming_availability
-                     if item.available and item.region.casefold() == region.casefold()
-                     and item.provider_type in {"subscription", "free"}]
-        matching = {
-            service for service, aliases in _REQUEST_SERVICES.items()
-            if any(_provider_matches(item.provider, aliases) for item in available)
-        }
-        if matching & excluded_services:
-            continue
-        if included_services and not matching.intersection(included_services):
-            continue
+        if require_streaming_match:
+            available = [item for item in candidate.streaming_availability
+                         if item.available and item.region.casefold() == region.casefold()
+                         and item.provider_type in {"subscription", "free"}]
+            matching = {
+                service for service, aliases in _REQUEST_SERVICES.items()
+                if any(_provider_matches(item.provider, aliases) for item in available)
+            }
+            if matching & excluded_services:
+                continue
+            if included_services and not matching.intersection(included_services):
+                continue
         filtered.append(candidate)
     return filtered
 

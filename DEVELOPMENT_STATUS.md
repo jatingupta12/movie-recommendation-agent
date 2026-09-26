@@ -153,3 +153,11 @@ Weekend digest sections now display selected titles by release year descending, 
 ## Explicit cast filtering
 
 Natural-language requests introduced with “starring” or “cast with” now resolve the name through TMDB person search, pass the resolved TMDB person ID to Discover's `with_cast` filter, and require candidates to come from that cast-filtered result before AI selection. Missing person matches fail closed instead of returning unrelated titles. The parsed person name/ID are included in the API intent object. Added mocked TMDB/person and end-to-end pipeline regression tests for an action movie starring Tom Cruise. Validation: `.venv/bin/python -m pytest -q` passed (82 tests).
+
+## Explicit-request latency reduction
+
+A specific request such as “horror for tonight” previously ran the full broad pool (trending, new, highly rated, hidden gems) and added targeted genre discovery, then refreshed Watchmode sequentially for every discovered title before applying the request's genre/media constraints. This duplicated TMDB work and allowed dozens of unnecessary Watchmode calls. Explicitly constrained requests now use targeted discovery instead of the broad pool, apply factual genre/media/language/cast filters before availability lookups, and bound Watchmode refreshes to a small popularity/rating shortlist (up to 8 for the default chat digest). The digest request overfetch was reduced from 4× to 2×. Added a regression test asserting focused discovery and an 8-title availability ceiling. Validation: `.venv/bin/python -m pytest -q` passed (83 tests).
+
+### Cast-name phrasing follow-up
+
+Expanded cast intent parsing to recognize natural phrasings such as “suggest a Tom Cruise movie” in addition to “starring Tom Cruise”. Person search now requires an exact case-insensitive TMDB name match; fuzzy person results cannot silently become a cast constraint. Unresolved explicit “starring” constraints fail closed, while an unrecognized generic phrase is not treated as a person. Validation: `.venv/bin/python -m pytest -q` passed (84 tests).

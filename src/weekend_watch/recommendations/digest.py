@@ -62,7 +62,7 @@ class WeekendDigestService:
         else:
             request_discovery = getattr(self.pipeline, "get_candidates_for_request", None)
             if request_discovery:
-                candidates = request_discovery(request=request, limit=total * 4)
+                candidates = request_discovery(request=request, limit=total * 2)
             else:
                 candidates = self.pipeline.get_weekend_candidates(limit=total * 4)
         # Apply explicit request constraints before AI or section allocation,

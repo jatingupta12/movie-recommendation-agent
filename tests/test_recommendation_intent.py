@@ -78,3 +78,15 @@ def test_starring_actor_is_resolved_to_tmdb_person_id():
         "with_genres": "28",
         "with_cast": "500",
     }
+
+
+def test_actor_name_in_suggest_a_name_movie_form_becomes_cast_constraint():
+    class ActorTmdb:
+        def search_people(self, query):
+            assert query == "tom cruise"
+            return [Person(id=500, name="Tom Cruise", popularity=40)]
+
+    intent = extract_request_intent("suggest a tom cruise movie", tmdb=ActorTmdb())
+    assert intent.person_names == ["Tom Cruise"]
+    assert intent.person_ids == [500]
+    assert intent.tmdb_discover_params("movie") == {"with_cast": "500"}

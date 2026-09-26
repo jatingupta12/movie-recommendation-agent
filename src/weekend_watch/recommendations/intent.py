@@ -96,6 +96,7 @@ def extract_request_intent(request: str, *, tmdb=None, region: str = "US") -> Re
     genre_names = sorted(selected_genres)
     person_names = requested_people(request)
     person_ids: list[int] = []
+    resolved_person_names: list[str] = []
     if tmdb is not None:
         for name in person_names:
             try:
@@ -103,10 +104,17 @@ def extract_request_intent(request: str, *, tmdb=None, region: str = "US") -> Re
             except Exception:
                 matches = []
             exact = [person for person in matches if person.name.casefold() == name.casefold()]
-            selected_person = max(exact or matches, key=lambda person: person.popularity or 0,
+            # Avoid turning a loosely similar TMDB search result into a cast
+            # constraint or claiming the wrong person.
+            selected_person = max(exact, key=lambda person: person.popularity or 0,
                                   default=None)
             if selected_person is not None:
+                resolved_person_names.append(selected_person.name)
                 person_ids.append(selected_person.id)
+            elif re.search(r"\b(?:starring|cast with)\b", request, re.IGNORECASE):
+                # An explicitly named cast constraint must fail closed.
+                resolved_person_names.append(name)
+        person_names = resolved_person_names
     genre_ids: dict[str, list[int]] = {}
     if tmdb is not None and genre_names:
         media_types = [media] if media != "both" else ["movie", "tv"]

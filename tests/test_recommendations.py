@@ -276,6 +276,42 @@ def test_explicit_starring_actor_uses_tmdb_cast_filter_and_excludes_other_action
     assert tmdb.calls[-1]["with_genres"] == "28"
 
 
+def test_explicit_request_skips_broad_discovery_and_bounds_watchmode_calls(context):
+    _, service = context
+    service.update_user_preferences(
+        UserPreferences(trending_enabled=True, new_releases_enabled=True,
+                        hidden_gems_enabled=True, tv_enabled=False)
+    )
+    films = [title(100 + index, f"Horror {index}", genres=["Horror"], popularity=50 - index)
+             for index in range(20)]
+    lookups = []
+
+    class FocusedTmdb(FakeTmdb):
+        def get_genres(self, media_type):
+            assert media_type == "movie"
+            return [Genre(id=27, name="Horror")]
+
+        def discover_movies(self, **filters):
+            self.calls.append(filters)
+            if "with_genres" in filters:
+                return self.results(films)
+            raise AssertionError("broad discovery should be skipped for a specific request")
+
+    tmdb = FocusedTmdb()
+
+    def lookup(item, _region):
+        lookups.append(item.tmdb_id)
+        return []
+
+    candidates = pipeline_for(service, tmdb, availability_lookup=lookup).get_candidates_for_request(
+        request="Suggest a horror movie for tonight", limit=16,
+    )
+
+    assert len(candidates) == 8
+    assert len(lookups) == 8
+    assert all("with_genres" in call for call in tmdb.calls)
+
+
 def test_hidden_gem_favors_low_popularity_and_strong_preference_match(context):
     _, service = context
     service.update_user_preferences(UserPreferences(preferred_genres=["Sci-Fi"], trending_enabled=False,

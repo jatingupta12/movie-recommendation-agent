@@ -1,7 +1,7 @@
 from weekend_watch.recommendations.intent import extract_request_intent
 from weekend_watch.recommendations.request_filters import filter_candidates_by_request
 from weekend_watch.recommendations.models import WeekendCandidate
-from weekend_watch.tmdb.models import Genre, Title
+from weekend_watch.tmdb.models import Genre, Person, Title
 
 
 class IntentTmdb:
@@ -57,3 +57,24 @@ def test_multiple_explicit_genres_are_all_required():
     candidate = WeekendCandidate(title=comedy, categories=["TRENDING"], match_score=70,
                                  score_breakdown={})
     assert filter_candidates_by_request([candidate], "horror comedy movie") == []
+
+
+def test_starring_actor_is_resolved_to_tmdb_person_id():
+    class ActorTmdb(IntentTmdb):
+        def get_genres(self, media_type):
+            assert media_type == "movie"
+            return [Genre(id=28, name="Action")]
+
+        def search_people(self, query):
+            assert query == "Tom Cruise"
+            return [Person(id=500, name="Tom Cruise", popularity=40)]
+
+    intent = extract_request_intent(
+        "Suggest an action movie starring Tom Cruise", tmdb=ActorTmdb(),
+    )
+    assert intent.person_names == ["Tom Cruise"]
+    assert intent.person_ids == [500]
+    assert intent.tmdb_discover_params("movie") == {
+        "with_genres": "28",
+        "with_cast": "500",
+    }

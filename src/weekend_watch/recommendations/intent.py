@@ -5,7 +5,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .request_filters import _LANGUAGES, _REQUEST_SERVICES, requested_genres, requested_media_type
+from .request_filters import (
+    _LANGUAGES, _REQUEST_SERVICES, requested_genres, requested_media_type,
+    requested_people,
+)
 _REGIONS = {
     "us": "US", "usa": "US", "united states": "US", "america": "US",
     "uk": "GB", "united kingdom": "GB", "britain": "GB",
@@ -41,6 +44,8 @@ class RecommendationIntent(BaseModel):
     region: str = "US"
     genre_names: list[str] = Field(default_factory=list)
     genre_ids: dict[str, list[int]] = Field(default_factory=dict)
+    person_names: list[str] = Field(default_factory=list)
+    person_ids: list[int] = Field(default_factory=list)
     language_name: str | None = None
     language_code: str | None = None
     keywords: list[str] = Field(default_factory=list)
@@ -60,6 +65,8 @@ class RecommendationIntent(BaseModel):
         ids = self.genre_ids.get(media_type, [])
         if ids:
             params["with_genres"] = ",".join(map(str, ids))
+        if self.person_ids:
+            params["with_cast"] = ",".join(map(str, self.person_ids))
         if self.language_code:
             params["with_original_language"] = self.language_code
         return params
@@ -87,6 +94,19 @@ def extract_request_intent(request: str, *, tmdb=None, region: str = "US") -> Re
 
     selected_genres = requested_genres(request)
     genre_names = sorted(selected_genres)
+    person_names = requested_people(request)
+    person_ids: list[int] = []
+    if tmdb is not None:
+        for name in person_names:
+            try:
+                matches = tmdb.search_people(name)
+            except Exception:
+                matches = []
+            exact = [person for person in matches if person.name.casefold() == name.casefold()]
+            selected_person = max(exact or matches, key=lambda person: person.popularity or 0,
+                                  default=None)
+            if selected_person is not None:
+                person_ids.append(selected_person.id)
     genre_ids: dict[str, list[int]] = {}
     if tmdb is not None and genre_names:
         media_types = [media] if media != "both" else ["movie", "tv"]
@@ -119,6 +139,7 @@ def extract_request_intent(request: str, *, tmdb=None, region: str = "US") -> Re
             keywords.append(phrase)
     return RecommendationIntent(
         media_type=media, region=target_region, genre_names=genre_names,
+        person_names=person_names, person_ids=person_ids,
         genre_ids=genre_ids, language_name=language_name, language_code=language_code,
         keywords=keywords, streaming_services=services, provider_ids=provider_ids,
         theatrical=theatrical, ott=ott,

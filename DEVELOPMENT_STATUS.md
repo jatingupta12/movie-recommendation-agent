@@ -149,3 +149,7 @@ Added mocked tests for Hindi + horror + Netflix/Prime request mapping, language/
 ## Digest display ordering
 
 Weekend digest sections now display selected titles by release year descending, with titles missing a valid release date after dated titles. Relevance-based selection is retained, and stable ordering preserves the existing relevance order for titles from the same year. Since the chat renders these API digest sections, its cards follow the same order. Validation: `.venv/bin/python -m pytest -q` passed (79 tests); `git diff --check` passed.
+
+## Explicit cast filtering
+
+Natural-language requests introduced with “starring” or “cast with” now resolve the name through TMDB person search, pass the resolved TMDB person ID to Discover's `with_cast` filter, and require candidates to come from that cast-filtered result before AI selection. Missing person matches fail closed instead of returning unrelated titles. The parsed person name/ID are included in the API intent object. Added mocked TMDB/person and end-to-end pipeline regression tests for an action movie starring Tom Cruise. Validation: `.venv/bin/python -m pytest -q` passed (82 tests).

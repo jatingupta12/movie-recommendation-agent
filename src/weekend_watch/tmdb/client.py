@@ -7,7 +7,7 @@ from typing import Any, Literal
 import httpx
 
 from ..security import protect_httpx_logs
-from .models import Genre, ReleaseInfo, SearchResults, Title
+from .models import Genre, Person, ReleaseInfo, SearchResults, Title
 
 protect_httpx_logs()
 logger = logging.getLogger(__name__)
@@ -149,6 +149,24 @@ class TmdbClient:
     def search_tv(self, query: str, *, page: int = 1, **filters: Any) -> SearchResults:
         payload = self._get("/search/tv", {"query": query, "page": page, **filters})
         return self._results("tv", payload)
+
+    def search_people(self, query: str, *, page: int = 1) -> list[Person]:
+        """Resolve an explicitly requested cast name to TMDB person identities."""
+        payload = self._get("/search/person", {
+            "query": query, "page": page, "include_adult": "false", "language": "en-US",
+        })
+        values = payload.get("results", [])
+        if not isinstance(values, list):
+            raise TmdbError("TMDB returned an unexpected person response")
+        people: list[Person] = []
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            try:
+                people.append(Person.model_validate(item))
+            except (TypeError, ValueError):
+                logger.warning("Skipping malformed TMDB person result")
+        return people
 
     def get_movie_details(self, tmdb_id: int, *, append_to_response: str | None = None) -> Title:
         params = {"append_to_response": append_to_response} if append_to_response else None

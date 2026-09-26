@@ -10,6 +10,14 @@ class Genre(BaseModel):
     name: str
 
 
+class Person(BaseModel):
+    """Minimal normalized TMDB person identity used for cast filtering."""
+
+    id: int = Field(gt=0)
+    name: str = Field(min_length=1)
+    popularity: float | None = Field(default=None, ge=0)
+
+
 class Title(BaseModel):
     """Application view of a movie or TV title, independent of raw TMDB JSON."""
 

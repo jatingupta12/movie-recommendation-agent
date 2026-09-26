@@ -71,11 +71,29 @@ def requested_media_type(request: str) -> str | None:
     return "tv" if wants_tv else "movie"
 
 
+def requested_people(request: str) -> list[str]:
+    """Extract names explicitly introduced as requested cast members."""
+    match = re.search(r"\b(?:starring|cast with)\s+(.+)$", request, re.IGNORECASE)
+    if not match:
+        return []
+    name = re.split(
+        r"\b(?:on|in|for|tonight|please|movie|movies|film|films|series|show|shows|tv|"
+        r"streaming|who|that|this weekend|action|adventure|animation|comedy|crime|"
+        r"documentary|drama|family|fantasy|horror|mystery|romance|thriller|western|and)\b",
+        match.group(1), maxsplit=1, flags=re.IGNORECASE,
+    )[0]
+    words = re.findall(r"[A-Za-z][A-Za-z.'-]*", name)
+    if len(words) < 2:
+        return []
+    return [" ".join(words[:3])]
+
+
 def filter_candidates_by_request(candidates: list[WeekendCandidate], request: str, *,
                                  region: str = "US") -> list[WeekendCandidate]:
     """Apply explicit genre, media, and streaming constraints to factual data."""
     genres = requested_genres(request)
     media_type = requested_media_type(request)
+    people = requested_people(request)
     lowered = request.casefold()
     requested_language = next((code for name, code in _LANGUAGES.items()
                                if re.search(rf"(?<![\w]){re.escape(name)}(?![\w])", lowered)), None)
@@ -96,6 +114,8 @@ def filter_candidates_by_request(candidates: list[WeekendCandidate], request: st
 
     filtered = []
     for candidate in candidates:
+        if people and "ACTOR_MATCH" not in candidate.categories:
+            continue
         title_genres = {g.casefold() for g in candidate.title.genres}
         genre_matches = {
             genre: bool(({genre} | _GENRE_MATCH_ALIASES.get(genre, set())) & title_genres)

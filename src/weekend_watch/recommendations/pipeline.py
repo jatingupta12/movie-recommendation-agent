@@ -165,13 +165,15 @@ class RecommendationPipeline:
                 unsupported_genre = bool(intent.genre_names and not intent.genre_ids.get(media_type))
                 if unsupported_genre and not keyword_targeted:
                     return [], False
+                if intent.person_names and not intent.person_ids:
+                    return [], False
                 if not filters and not intent.genre_names:
                     return [], False
                 return discover(page=1, sort_by="popularity.desc", **filters).results, keyword_targeted
 
             with ThreadPoolExecutor(max_workers=3) as executor:
                 theater_future = None
-                if intent.theatrical and preferences.movies_enabled and intent.media_type != "tv":
+                if intent.theatrical and not intent.person_names and preferences.movies_enabled and intent.media_type != "tv":
                     theater_future = executor.submit(
                         self.tmdb.get_now_playing_movies, region=intent.region
                     )
@@ -205,6 +207,9 @@ class RecommendationPipeline:
                     if keyword_targeted:
                         for title in targeted_titles:
                             discovered[("tmdb", title.tmdb_id)]["categories"].add("KEYWORD_MATCH")
+                    if intent.person_ids:
+                        for title in targeted_titles:
+                            discovered[("tmdb", title.tmdb_id)]["categories"].add("ACTOR_MATCH")
         results = []
         for item in discovered.values():
             title: Title = item["title"]

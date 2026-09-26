@@ -113,6 +113,27 @@ def test_now_playing_and_keyword_search_are_normalized_and_keep_tmdb_params():
         http.close()
 
 
+def test_person_search_returns_normalized_people():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"results": [
+            {"id": 500, "name": "Tom Cruise", "popularity": 40.1},
+            {"invalid": True},
+        ]})
+
+    client, http = client_with(handler, api_key="mock")
+    try:
+        people = client.search_people("Tom Cruise")
+        assert [(person.id, person.name) for person in people] == [(500, "Tom Cruise")]
+        assert requests[0].url.path == "/3/search/person"
+        assert requests[0].url.params["query"] == "Tom Cruise"
+    finally:
+        client.close()
+        http.close()
+
+
 def test_retry_transient_server_failure_and_surface_permanent_error():
     calls = 0
 

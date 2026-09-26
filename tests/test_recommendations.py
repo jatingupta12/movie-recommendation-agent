@@ -241,6 +241,41 @@ def test_theatrical_request_uses_country_now_playing_and_marks_category(context)
     assert "IN_THEATERS" in candidates[0].categories
 
 
+def test_explicit_starring_actor_uses_tmdb_cast_filter_and_excludes_other_action_titles(context):
+    _, service = context
+    service.update_user_preferences(
+        UserPreferences(trending_enabled=False, new_releases_enabled=False, hidden_gems_enabled=False,
+                       tv_enabled=False)
+    )
+    tom_cruise_film = title(36, "Mission: Impossible", genres=["Action"])
+    other_action_film = title(37, "Unrelated Action Film", genres=["Action"])
+
+    class ActorTmdb(FakeTmdb):
+        def get_genres(self, media_type):
+            return [Genre(id=28, name="Action")]
+
+        def search_people(self, query):
+            from weekend_watch.tmdb.models import Person
+            assert query == "Tom Cruise"
+            return [Person(id=500, name="Tom Cruise", popularity=40)]
+
+        def discover_movies(self, **filters):
+            if "with_cast" in filters:
+                self.calls.append(filters)
+                return self.results([tom_cruise_film])
+            return self.results([other_action_film])
+
+    tmdb = ActorTmdb()
+    candidates = pipeline_for(service, tmdb).get_candidates_for_request(
+        request="Suggest an action movie starring Tom Cruise", limit=8,
+    )
+
+    assert [candidate.title.title for candidate in candidates] == ["Mission: Impossible"]
+    assert "ACTOR_MATCH" in candidates[0].categories
+    assert tmdb.calls[-1]["with_cast"] == "500"
+    assert tmdb.calls[-1]["with_genres"] == "28"
+
+
 def test_hidden_gem_favors_low_popularity_and_strong_preference_match(context):
     _, service = context
     service.update_user_preferences(UserPreferences(preferred_genres=["Sci-Fi"], trending_enabled=False,

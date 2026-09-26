@@ -53,11 +53,13 @@ def test_ai_environment_configuration(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "groq-test")
     monkeypatch.setenv("ANTHROPIC_MODEL", "claude-model-test")
     monkeypatch.setenv("GROQ_MODEL", "groq-model-test")
+    monkeypatch.setenv("AI_RECOMMENDATION_PROVIDER", "groq")
     settings = Settings()
     assert settings.anthropic_api_key == "claude-test"
     assert settings.groq_api_key == "groq-test"
     assert settings.anthropic_model == "claude-model-test"
     assert settings.groq_model == "groq-model-test"
+    assert settings.ai_recommendation_provider == "groq"
 
 
 def test_provider_clients_use_structured_json_schemas():
@@ -218,3 +220,45 @@ def test_invalid_model_ids_fall_back_without_inventing_titles():
     assert len(results) == 1 and results[0].tmdb_id == 3
     assert results[0].title == "Arrival"
     assert results[0].groq_used is False
+
+
+def test_groq_only_recommendations_filter_to_requested_tmdb_genre():
+    from weekend_watch.recommendations.ai import GroqClassification, GroqFilterResult
+
+    horror = candidate(11, "Night Film")
+    horror = horror.model_copy(update={"title": horror.title.model_copy(update={"genres": ["Horror"]})})
+    comedy = candidate(12, "Funny Film")
+    comedy = comedy.model_copy(update={"title": comedy.title.model_copy(update={"genres": ["Comedy"]})})
+
+    class SelectFromGroq:
+        seen_ids = []
+
+        def filter_candidates(self, candidates, *_args):
+            self.seen_ids = [item.title.tmdb_id for item in candidates]
+            return GroqFilterResult(selected_tmdb_ids=[11], classifications=[
+                GroqClassification(tmdb_id=11, strong_match=True, match_reason="fit")
+            ])
+
+    groq = SelectFromGroq()
+    result = AIRecommendationService(FakePipeline([horror, comedy]), groq=groq).recommend(
+        request="Something horror for tonight", limit=8,
+    )
+    assert groq.seen_ids == [11]
+    assert [item.title for item in result] == ["Night Film"]
+    assert result[0].explanation_source == "groq"
+
+
+def test_groq_failure_preserves_explicit_genre_guard():
+    class FailedGroq:
+        def filter_candidates(self, *_args):
+            raise AIProviderError("offline")
+
+    horror = candidate(21, "Scary Film")
+    horror = horror.model_copy(update={"title": horror.title.model_copy(update={"genres": ["Horror"]})})
+    drama = candidate(22, "Serious Film")
+    drama = drama.model_copy(update={"title": drama.title.model_copy(update={"genres": ["Drama"]})})
+    result = AIRecommendationService(FakePipeline([horror, drama]), groq=FailedGroq()).recommend(
+        request="horror", limit=8,
+    )
+    assert [item.title for item in result] == ["Scary Film"]
+    assert result[0].explanation_source == "deterministic"

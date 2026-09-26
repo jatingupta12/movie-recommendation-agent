@@ -16,7 +16,7 @@ python -m pip install -e '.[dev]'
 cp -n .env.example .env
 ```
 
-Edit `.env` and add credentials only for services you plan to use. Never put credentials in source files or commit `.env`; the example contains blank credential values. `TMDB_API_KEY` or `TMDB_ACCESS_TOKEN` is required for discovery and title search. `WATCHMODE_API_KEY` is optional and enables live availability refresh; previously cached availability can still be used without it. `ANTHROPIC_API_KEY` enables Claude's final recommendation selection and `GROQ_API_KEY` enables optional fast filtering. Both are optional, and deterministic recommendations remain available without them. `WEEKEND_WATCH_DATABASE_PATH` selects the SQLite database (default `data/weekend_watch.db`). `WATCHMODE_REGION` defaults to `US`; `WATCHMODE_CACHE_TTL_HOURS` defaults to 24. Override provider models with `ANTHROPIC_MODEL` and `GROQ_MODEL` if needed.
+Edit `.env` and add credentials only for services you plan to use. Never put credentials in source files or commit `.env`; the example contains blank credential values. `TMDB_API_KEY` or `TMDB_ACCESS_TOKEN` is required for discovery and title search. `WATCHMODE_API_KEY` is optional and enables live availability refresh; previously cached availability can still be used without it. `AI_RECOMMENDATION_PROVIDER` defaults to `groq`, so recommendations use Groq without calling Claude. Set it to `claude` or `auto` to enable Claude final selection (with Groq prefiltering when configured), or `deterministic` to disable AI. `GROQ_API_KEY` and `ANTHROPIC_API_KEY` are only required for selected provider stages; unavailable AI falls back to deterministic ranking. Explicit requested genres are checked against TMDB genres before selection and remain enforced in fallback. `WEEKEND_WATCH_DATABASE_PATH` selects the SQLite database (default `data/weekend_watch.db`). `WATCHMODE_REGION` defaults to `US`; `WATCHMODE_CACHE_TTL_HOURS` defaults to 24. Override provider models with `ANTHROPIC_MODEL` and `GROQ_MODEL` if needed.
 
 The HTTP listener defaults to `WEEKEND_WATCH_API_HOST=127.0.0.1` and `WEEKEND_WATCH_API_PORT=8000`. The API has no authentication and is intended for local use; keep it on localhost unless network access is separately restricted. Binding to `0.0.0.0` can expose it to other machines on the network.
 
@@ -82,7 +82,7 @@ weekend-watch recommend --request "Something smart and funny for tonight" --limi
 # or: python -m weekend_watch.cli recommend
 ```
 
-Groq can classify/filter deterministic candidates, then Claude selects and ranks them. Both stages use structured JSON. Claude emits a candidate ID, an evidence category, and confidence; the app renders the explanation using structured facts rather than accepting free-form factual claims. No internal reasoning is returned or stored.
+By default, Groq selects and filters deterministic candidates without invoking Claude. Set `AI_RECOMMENDATION_PROVIDER=auto` or `claude` to use the two-stage Groq → Claude flow. Both stages use structured JSON. Claude emits a candidate ID, an evidence category, and confidence; the app renders explanations from structured facts rather than accepting free-form factual claims. No internal reasoning is returned or stored.
 
 Generate a three-section Markdown digest (8 titles by default) and optionally save it:
 

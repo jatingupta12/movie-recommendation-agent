@@ -168,7 +168,8 @@ def main() -> None:
                     rating = f" — {item.rating:.1f}/10" if item.rating is not None else ""
                     year = f" ({item.release_date[:4]})" if item.release_date else ""
                     services = f" — Streaming: {', '.join(item.streaming_services)}" if item.streaming_services else ""
-                    source = "Claude" if item.explanation_source == "claude" else "Deterministic fallback"
+                    source = {"claude": "Claude", "groq": "Groq",
+                              "deterministic": "Deterministic fallback"}[item.explanation_source]
                     print(f"[{item.category}] {item.title}{year} [{item.media_type}]{rating} — {source}")
                     print(f"  {item.recommendation_reason}{services}")
         except (TmdbError, WatchmodeError, WatchmodeTitleNotFound, ValueError) as exc:

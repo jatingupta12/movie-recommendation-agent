@@ -121,3 +121,12 @@ python -m weekend_watch.api
 ### Review validation
 
 Python 3.11 validation: `python -m pytest` passed (58 tests); `python -m compileall -q src`, `python -m pip check`, and `git diff --check` passed. `python -m weekend_watch.cli health` initialized and checked `data/weekend_watch.db`. The sandbox blocks binding a live TCP socket, so `/health` and `POST /api/weekend-digest` are verified with FastAPI's in-process test client; live HTTP listener startup must be confirmed in the user's local environment.
+
+## Follow-up fixes
+
+- Watchmode uses the `X-API-Key` header and media-type-specific TMDB search fields. A conflicting stale local type mapping is refreshed; duplicate provider rows are collapsed before persistence; `tv_movie` results normalize as movies.
+- Watchmode lookup warnings now include the sanitized provider error detail while continuing to use unexpired cached availability when available.
+- Recommendation provider defaults to Groq without initializing Claude. Explicit requested genres are checked against TMDB genre metadata and stay enforced during deterministic fallback. Set `AI_RECOMMENDATION_PROVIDER` to `claude`, `auto`, or `deterministic` to change the mode.
+- Recovered 33 zero-byte tracked source, test, and documentation files from the last committed version after the health command failed to import `get_settings`. Preserved the local SQLite database file; `health` initialized it successfully.
+
+Python 3.11 validation after recovery: `python -m weekend_watch.cli health` succeeded, `python -m pytest -q` passed (68 tests), `git diff --check` passed, and `.env` is ignored by Git.

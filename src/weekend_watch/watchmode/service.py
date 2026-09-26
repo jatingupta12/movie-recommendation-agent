@@ -25,9 +25,10 @@ class WatchmodeService:
                                media_type: Literal["movie", "tv"] | None = None
                                ) -> list[StreamingAvailability]:
         title = self.titles.get_by_provider_external("tmdb", tmdb_id)
-        watchmode_id = self.watchmode.get_mapping(title["id"]) if title else None
-        if title and media_type and title["media_type"] != media_type:
-            raise WatchmodeTitleNotFound(f"TMDB title {tmdb_id} is not a {media_type}")
+        type_changed = bool(title and media_type and title["media_type"] != media_type)
+        watchmode_id = self.watchmode.get_mapping(title["id"]) if title and not type_changed else None
+        if type_changed:
+            self.watchmode.clear_availability_cache(int(title["id"]), self.region)
 
         # Resolve through Watchmode's TMDB search field; these IDs are distinct namespaces.
         if watchmode_id is None:
@@ -43,6 +44,9 @@ class WatchmodeService:
                 )
             else:
                 title_id = int(title["id"])
+                if type_changed:
+                    self.titles.update_identity_details(title_id, media_type=match.media_type,
+                                                        name=match.title)
             self.watchmode.save_mapping(title_id, match.watchmode_id)
             watchmode_id = match.watchmode_id
         else:

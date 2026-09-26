@@ -210,7 +210,7 @@ def test_recommendation_weights_are_configurable_and_score_is_explainable(contex
     assert candidates[0].score_breakdown["rating"] == 0.84
 
 
-def test_watchmode_failure_does_not_recommend_from_expired_availability(context):
+def test_watchmode_failure_does_not_recommend_from_expired_availability(context, caplog):
     db, service = context
     film = title(90)
     local_id = service.titles.upsert(**film.to_repository_fields())
@@ -238,6 +238,7 @@ def test_watchmode_failure_does_not_recommend_from_expired_availability(context)
         pipeline = build_recommendation_pipeline(
             settings, db, FakeTmdb(), stack, watchmode_client_factory=FailingWatchmode
         )
-        availability = pipeline._availability(film)
+    availability = pipeline._availability(film)
 
     assert availability == []
+    assert "upstream unavailable" in caplog.text

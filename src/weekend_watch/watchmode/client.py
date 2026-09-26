@@ -30,6 +30,7 @@ class WatchmodeClient:
         self.retry_delay = max(0, retry_delay)
         self._client = http_client or httpx.Client(timeout=15.0)
         self._owns_client = http_client is None
+        self._headers = {"X-API-Key": api_key}
 
     def close(self) -> None:
         if self._owns_client:
@@ -42,11 +43,11 @@ class WatchmodeClient:
         self.close()
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        request_params = {"apiKey": self.api_key, **(params or {})}
+        request_params = dict(params or {})
         url = f"{self.BASE_URL}{path}"
         for attempt in range(self.max_retries + 1):
             try:
-                response = self._client.get(url, params=request_params)
+                response = self._client.get(url, params=request_params, headers=self._headers)
                 if response.status_code in {408, 425, 429} or response.status_code >= 500:
                     if attempt < self.max_retries:
                         retry_after = response.headers.get("Retry-After")
@@ -62,17 +63,38 @@ class WatchmodeClient:
                     raise WatchmodeError("Watchmode request failed after retries") from None
                 time.sleep(self.retry_delay * (2 ** attempt))
             except httpx.HTTPStatusError as exc:
-                raise WatchmodeError(f"Watchmode returned HTTP {exc.response.status_code}") from None
+                detail = self._error_detail(exc.response)
+                suffix = f": {detail}" if detail else ""
+                raise WatchmodeError(f"Watchmode returned HTTP {exc.response.status_code}{suffix}") from None
             except ValueError as exc:
                 raise WatchmodeError("Watchmode returned invalid JSON") from None
         raise WatchmodeError("Watchmode request failed")
 
+    def _error_detail(self, response: httpx.Response) -> str:
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        detail = ""
+        if isinstance(body, dict):
+            for key in ("error", "message", "detail", "status_message"):
+                value = body.get(key)
+                if isinstance(value, str) and value.strip():
+                    detail = value.strip()
+                    break
+        return " ".join(detail.replace(self.api_key, "[REDACTED]").split())[:240]
+
     def search_by_tmdb_id(self, tmdb_id: int, media_type: Literal["movie", "tv"] | None = None) -> list[WatchmodeTitle]:
-        payload = self._get("/search/", {"search_field": "tmdb_id", "search_value": tmdb_id})
-        titles = self._search_records(payload)
-        normalized = self._normalize_titles(titles, tmdb_id)
-        return [item for item in normalized if item.tmdb_id == tmdb_id
-                and (media_type is None or item.media_type == media_type)]
+        fields = {"movie": ["tmdb_movie_id"], "tv": ["tmdb_tv_id"],
+                  None: ["tmdb_movie_id", "tmdb_tv_id"]}[media_type]
+        matches = []
+        for field in fields:
+            payload = self._get("/search/", {"search_field": field, "search_value": tmdb_id})
+            titles = self._search_records(payload)
+            matches.extend(item for item in self._normalize_titles(titles, tmdb_id)
+                           if item.tmdb_id == tmdb_id and item.media_type in (
+                               {media_type} if media_type else {"movie", "tv"}))
+        return matches
 
     def search_titles(self, query: str, *, media_type: Literal["movie", "tv"] | None = None) -> list[WatchmodeTitle]:
         params: dict[str, Any] = {"search_field": "name", "search_value": query}
@@ -102,14 +124,15 @@ class WatchmodeClient:
                 continue
             try:
                 normalized.append(cls._title(record, tmdb_id))
-            except (TypeError, ValueError, WatchmodeError):
-                logger.warning("Skipping malformed Watchmode title result (id=%r)", record.get("id"))
+            except (TypeError, ValueError, WatchmodeError) as exc:
+                logger.warning("Skipping malformed Watchmode title result (id=%r): %s",
+                               record.get("id"), str(exc))
         return normalized
 
     @staticmethod
     def _title(data: dict[str, Any], tmdb_id: int | None = None) -> WatchmodeTitle:
         raw_type = str(data.get("type", data.get("title_type", ""))).lower()
-        if raw_type in {"movie", "film", "1"}:
+        if raw_type in {"movie", "film", "tv_movie", "short_film", "1"}:
             media_type = "movie"
         elif raw_type in {"tv", "tv_series", "tv_miniseries", "tv_special", "2", "3", "4"}:
             media_type = "tv"
@@ -160,4 +183,7 @@ class WatchmodeClient:
                 ))
             except (TypeError, ValueError):
                 logger.warning("Skipping malformed Watchmode source (id=%r)", source.get("source_id"))
-        return results
+        unique: dict[tuple[str, str, str, str | None], StreamingAvailability] = {}
+        for item in results:
+            unique[(item.provider, item.provider_type, item.region, item.web_url)] = item
+        return list(unique.values())

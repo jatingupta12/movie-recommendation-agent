@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Any, Literal
 
 import httpx
@@ -87,6 +88,30 @@ CLAUDE_SCHEMA = {
     "required": ["recommendations"],
     "additionalProperties": False,
 }
+
+_REQUEST_GENRES = {
+    "action": ("action",), "adventure": ("adventure",),
+    "animation": ("animation",), "comedy": ("comedy",),
+    "crime": ("crime",), "documentary": ("documentary",),
+    "drama": ("drama",), "family": ("family",), "fantasy": ("fantasy",),
+    "history": ("history",), "horror": ("horror",), "scary": ("horror",),
+    "music": ("music",), "mystery": ("mystery",), "romance": ("romance",),
+    "sci-fi": ("science fiction", "sci-fi"),
+    "science fiction": ("science fiction", "sci-fi"),
+    "thriller": ("thriller",), "war": ("war",), "western": ("western",),
+}
+
+
+def _filter_by_requested_genres(candidates: list[WeekendCandidate], request: str
+                                ) -> list[WeekendCandidate]:
+    """Apply explicit genre constraints against TMDB genres, never model claims."""
+    requested: set[str] = set()
+    for phrase, genres in _REQUEST_GENRES.items():
+        if re.search(rf"(?<![\w]){re.escape(phrase)}(?![\w])", request.casefold()):
+            requested.update(genres)
+    if not requested:
+        return candidates
+    return [c for c in candidates if requested.intersection(g.casefold() for g in c.title.genres)]
 
 
 class GroqClient:
@@ -261,30 +286,19 @@ class AIRecommendationService:
         if not candidates:
             return []
         preferences = preferences or self.pipeline.personalization.get_user_preferences()
-        # Without Claude there is no final reasoning stage, so keep the complete deterministic result.
+        candidates = _filter_by_requested_genres(candidates, request)
+        if not candidates:
+            return []
+        # Groq can select from the structured candidates without calling Claude.
         if self.claude is None:
-            return self._deterministic(candidates, limit, groq_used=False)
+            if self.groq is None:
+                return self._deterministic(candidates, limit, groq_used=False)
+            shortlist, groq_used = self._groq_shortlist(candidates, preferences, request)
+            if not groq_used:
+                return self._deterministic(candidates, limit, groq_used=False)
+            return [self._from_groq(item) for item in shortlist[:max(0, limit)]]
 
-        shortlist = candidates
-        groq_used = False
-        if self.groq is not None:
-            try:
-                result = self.groq.filter_candidates(candidates, preferences, request)
-                candidate_ids = {item.title.tmdb_id for item in candidates}
-                selected = result.selected_tmdb_ids
-                classified = [item.tmdb_id for item in result.classifications]
-                if (not selected or len(set(selected)) != len(selected)
-                        or not set(selected) <= candidate_ids
-                        or len(set(classified)) != len(classified)
-                        or not set(classified) <= candidate_ids):
-                    raise AIProviderError("Groq returned candidate IDs outside the deterministic set")
-                by_id = {item.title.tmdb_id: item for item in candidates}
-                shortlist = [by_id[tmdb_id] for tmdb_id in selected]
-                groq_used = True
-            except Exception as exc:
-                # Any failure confined to the optional fast stage must not block Claude.
-                logger.warning("Groq filter failed (%s); continuing with all candidates", type(exc).__name__)
-                shortlist = candidates
+        shortlist, groq_used = self._groq_shortlist(candidates, preferences, request)
 
         try:
             response = self.claude.select_recommendations(shortlist, preferences, request, limit)
@@ -300,6 +314,40 @@ class AIRecommendationService:
             # The AI layer is optional; preserve the deterministic result on provider or parsing errors.
             logger.warning("Claude recommendation failed (%s); using deterministic ranking", type(exc).__name__)
             return self._deterministic(candidates, limit, groq_used=False)
+
+    def _groq_shortlist(self, candidates: list[WeekendCandidate], preferences: UserPreferences,
+                        request: str) -> tuple[list[WeekendCandidate], bool]:
+        if self.groq is None:
+            return candidates, False
+        try:
+            result = self.groq.filter_candidates(candidates, preferences, request)
+            candidate_ids = {item.title.tmdb_id for item in candidates}
+            selected = result.selected_tmdb_ids
+            classified = [item.tmdb_id for item in result.classifications]
+            if (not selected or len(set(selected)) != len(selected)
+                    or not set(selected) <= candidate_ids
+                    or len(set(classified)) != len(classified)
+                    or not set(classified) <= candidate_ids):
+                raise AIProviderError("Groq returned candidate IDs outside the deterministic set")
+            by_id = {item.title.tmdb_id: item for item in candidates}
+            return [by_id[tmdb_id] for tmdb_id in selected], True
+        except Exception as exc:
+            logger.warning("Groq filter failed (%s); continuing with all candidates", type(exc).__name__)
+            return candidates, False
+
+    @staticmethod
+    def _from_groq(candidate: WeekendCandidate) -> Recommendation:
+        return Recommendation(
+            tmdb_id=candidate.title.tmdb_id, title=candidate.title.title,
+            media_type=candidate.title.media_type, rating=candidate.title.rating,
+            release_date=candidate.title.release_date, genres=candidate.title.genres,
+            streaming_services=sorted({item.provider for item in candidate.streaming_availability if item.available}),
+            category=_primary_category(candidate),
+            recommendation_reason="Selected by Groq as a match for your request.",
+            confidence=0.75, explanation_source="groq", groq_used=True,
+            availability_source="Watchmode" if any(item.available for item in candidate.streaming_availability)
+            else "not_confirmed",
+        )
 
     @staticmethod
     def _from_selection(candidate: WeekendCandidate, selection: ClaudeSelection,

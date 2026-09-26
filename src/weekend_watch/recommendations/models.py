@@ -50,7 +50,7 @@ class Recommendation(BaseModel):
     category: CandidateCategory
     recommendation_reason: str
     confidence: float = Field(ge=0, le=1)
-    explanation_source: Literal["claude", "deterministic"]
+    explanation_source: Literal["claude", "groq", "deterministic"]
     groq_used: bool = False
     metadata_source: Literal["TMDB"] = "TMDB"
     availability_source: Literal["Watchmode", "not_confirmed"] = "not_confirmed"

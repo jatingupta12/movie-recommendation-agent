@@ -4,7 +4,8 @@ import pytest
 from weekend_watch.config import Settings
 from weekend_watch.database import connect, initialize_database
 from weekend_watch.repositories import TitleRepository, WatchmodeRepository
-from weekend_watch.watchmode import WatchmodeClient, WatchmodeService
+from weekend_watch.watchmode import WatchmodeClient, WatchmodeError, WatchmodeService
+from weekend_watch.watchmode.models import StreamingAvailability
 
 
 def make_client(handler):
@@ -47,8 +48,9 @@ def test_search_by_tmdb_id_maps_to_distinct_watchmode_id_and_sources():
         assert [item.provider_type for item in options] == ["subscription", "rent", "buy"]
         assert options[0].web_url == "https://example.test/watch/film"
         assert options[1].price == "$3.99"
-        assert requests[0].url.params["apiKey"] == "mock-api-key"
-        assert requests[0].url.params["search_field"] == "tmdb_id"
+        assert requests[0].headers["x-api-key"] == "mock-api-key"
+        assert "apiKey" not in requests[0].url.params
+        assert requests[0].url.params["search_field"] == "tmdb_movie_id"
         assert requests[0].url.params["search_value"] == "123"
         assert requests[1].url.params["regions"] == "US"
     finally:
@@ -109,7 +111,7 @@ def test_empty_availability_is_cached(tmp_path):
             service = WatchmodeService(client, TitleRepository(db), WatchmodeRepository(db))
             assert service.availability_for_tmdb(10) == []
             assert service.availability_for_tmdb(10) == []
-        assert calls == 2  # search + one sources call; empty result still has a cache timestamp
+        assert calls == 3  # movie/TV ID lookups and sources call
     finally:
         http.close()
 
@@ -126,3 +128,113 @@ def test_watchmode_transport_error_does_not_include_query_api_key():
         assert secret not in str(error.value)
     finally:
         http.close()
+
+
+def test_tv_tmdb_mapping_uses_tv_specific_search_field():
+    seen = []
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json=[{"id": 781, "title": "Series", "type": "tv_series", "tmdb_id": 1396}])
+    client, http = make_client(handler)
+    try:
+        assert client.search_by_tmdb_id(1396, "tv")[0].watchmode_id == 781
+        assert seen[0].url.params["search_field"] == "tmdb_tv_id"
+    finally:
+        http.close()
+
+
+def test_untyped_tmdb_mapping_queries_movie_and_tv_fields():
+    fields = []
+    def handler(request):
+        fields.append(request.url.params["search_field"])
+        return httpx.Response(200, json=[])
+    client, http = make_client(handler)
+    try:
+        assert client.search_by_tmdb_id(25) == []
+        assert fields == ["tmdb_movie_id", "tmdb_tv_id"]
+    finally:
+        http.close()
+
+
+def test_watchmode_error_detail_is_useful_and_redacted():
+    secret = "private-test-key"
+    http = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(
+        400, json={"error": f"Invalid search field; {secret}"},
+    )))
+    client = WatchmodeClient(api_key=secret, http_client=http, max_retries=0)
+    try:
+        with pytest.raises(WatchmodeError) as error:
+            client.search_titles("A title")
+        assert "Invalid search field" in str(error.value)
+        assert secret not in str(error.value)
+    finally:
+        http.close()
+
+
+def test_repeated_watchmode_sources_are_collapsed_before_storage(tmp_path):
+    source = {"source_id": 2, "name": "Stream Co", "type": "sub", "web_url": "https://stream.test/x"}
+    def handler(request):
+        if request.url.path.endswith("/search/"):
+            return httpx.Response(200, json=[{"id": 780, "title": "Film", "type": "movie", "tmdb_id": 250}])
+        return httpx.Response(200, json=[source, source.copy()])
+    db_path = tmp_path / "duplicate-source.db"
+    initialize_database(db_path)
+    client, http = make_client(handler)
+    try:
+        with connect(db_path) as db:
+            service = WatchmodeService(client, TitleRepository(db), WatchmodeRepository(db))
+            options = service.availability_for_tmdb(250, "movie")
+            rows = list(db.execute("SELECT * FROM streaming_availability"))
+        assert len(options) == len(rows) == 1
+    finally:
+        http.close()
+
+
+def test_repository_deduplicates_duplicate_rows_with_null_urls(tmp_path):
+    db_path = tmp_path / "duplicate-null-url.db"
+    initialize_database(db_path)
+    with connect(db_path) as db:
+        title_id = TitleRepository(db).upsert(
+            provider="tmdb", external_id="1", media_type="movie", name="Example",
+        )
+        items = [StreamingAvailability(
+            title_id=title_id, provider="Stream Co", provider_type="subscription", web_url=None,
+            price=price,
+        ) for price in ("$5.99", "$6.99")]
+        repo = WatchmodeRepository(db)
+        repo.save_availability(title_id, 2, "US", items)
+        repo.save_availability(title_id, 2, "US", items)
+        rows = list(db.execute("SELECT * FROM streaming_availability"))
+    assert len(rows) == 1
+    assert rows[0]["price"] == "$6.99"
+
+
+def test_explicit_media_type_repairs_stale_tmdb_mapping(tmp_path):
+    fields = []
+    def handler(request):
+        if request.url.path.endswith("/search/"):
+            fields.append(request.url.params["search_field"])
+            return httpx.Response(200, json=[{"id": 973, "title": "Series 123", "type": "tv_series", "tmdb_id": 123}])
+        return httpx.Response(200, json=[])
+    db_path = tmp_path / "stale-type.db"
+    initialize_database(db_path)
+    client, http = make_client(handler)
+    try:
+        with connect(db_path) as db:
+            titles = TitleRepository(db)
+            watchmode = WatchmodeRepository(db)
+            title_id = titles.upsert(provider="tmdb", external_id="123", media_type="movie", name="Wrong")
+            watchmode.save_mapping(title_id, 972)
+            service = WatchmodeService(client, titles, watchmode)
+            service.availability_for_tmdb(123, "tv")
+            assert titles.get(title_id)["media_type"] == "tv"
+            assert titles.get(title_id)["name"] == "Series 123"
+            assert watchmode.get_mapping(title_id) == 973
+            assert fields == ["tmdb_tv_id"]
+    finally:
+        http.close()
+
+
+def test_tv_movie_result_normalizes_as_movie():
+    result = WatchmodeClient._normalize_titles([{"id": 1685639, "title": "TV Movie", "type": "tv_movie"}])
+    assert result[0].media_type == "movie"

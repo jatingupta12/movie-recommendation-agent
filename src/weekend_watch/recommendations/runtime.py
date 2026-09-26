@@ -43,9 +43,11 @@ def build_recommendation_pipeline(settings, db: sqlite3.Connection, tmdb: TmdbCl
             except WatchmodeTitleNotFound:
                 logger.info("Watchmode has no mapping for TMDB title %s", title.tmdb_id)
                 return []
-            except WatchmodeError:
-                logger.warning("Watchmode lookup failed for TMDB title %s; using unexpired cached availability if present",
-                               title.tmdb_id)
+            except WatchmodeError as exc:
+                logger.warning(
+                    "Watchmode lookup failed for TMDB title %s (%s); using unexpired cached availability if present",
+                    title.tmdb_id, str(exc),
+                )
                 cached = watchmode_repository.get_cached_availability(
                     local_id, settings.watchmode_region, ttl_hours=settings.watchmode_cache_ttl_hours
                 )
@@ -67,10 +69,11 @@ def build_ai_recommendation_service(settings, pipeline: RecommendationPipeline,
     """Create optional AI clients, scoped to the caller's ExitStack."""
     groq_key = getattr(settings, "groq_api_key", None)
     claude_key = getattr(settings, "anthropic_api_key", None)
+    provider = getattr(settings, "ai_recommendation_provider", "groq")
     groq = stack.enter_context(groq_client_factory(
         api_key=groq_key, model=getattr(settings, "groq_model", "openai/gpt-oss-20b")
-    )) if groq_key else None
+    )) if groq_key and provider in {"groq", "auto", "claude"} else None
     claude = stack.enter_context(claude_client_factory(
         api_key=claude_key, model=getattr(settings, "anthropic_model", "claude-sonnet-5")
-    )) if claude_key else None
+    )) if claude_key and provider in {"auto", "claude"} else None
     return AIRecommendationService(pipeline, groq=groq, claude=claude)

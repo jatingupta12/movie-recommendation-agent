@@ -77,7 +77,8 @@ def test_mcp_tool_errors_do_not_expose_provider_secrets(tmp_path):
         def __init__(self, **kwargs):
             raise ValueError("Set TMDB_API_KEY or TMDB_ACCESS_TOKEN to use TMDB")
 
-    settings = Settings(database_path=tmp_path / "no-config.sqlite3", tmdb_api_key=None)
+    settings = Settings(database_path=tmp_path / "no-config.sqlite3", tmdb_api_key=None,
+                        tmdb_access_token=None, watchmode_api_key=None)
     tools = WeekendWatchTools(settings, tmdb_client_factory=FailingTmdb)
     with pytest.raises(RuntimeError, match="credentials are not configured"):
         tools.search_movies("Dune")

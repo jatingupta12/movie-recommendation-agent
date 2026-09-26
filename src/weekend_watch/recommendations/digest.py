@@ -26,7 +26,7 @@ class WeekendDigestItem(BaseModel):
     synopsis: str
     why_it_matches: str
     category: DigestCategory
-    why_source: Literal["claude", "deterministic"] = "deterministic"
+    why_source: Literal["claude", "groq", "deterministic"] = "deterministic"
     metadata_source: Literal["TMDB"] = "TMDB"
     availability_source: Literal["Watchmode", "not_confirmed"] = "not_confirmed"
 
@@ -175,7 +175,8 @@ def _to_item(candidate: WeekendCandidate, section: DigestSectionName,
                    candidate, today - timedelta(days=today.weekday()), today
                )]
     ai_reason = (reasons_by_id or {}).get(title.tmdb_id)
-    is_ai_reason = ai_reason is not None and getattr(ai_reason, "explanation_source", None) == "claude"
+    source = getattr(ai_reason, "explanation_source", "deterministic")
+    is_ai_reason = source in {"claude", "groq"}
     if is_ai_reason:
         why = ai_reason.recommendation_reason
     else:
@@ -192,7 +193,7 @@ def _to_item(candidate: WeekendCandidate, section: DigestSectionName,
         streaming_services=available_services,
         synopsis=synopsis,
         why_it_matches=why,
-        why_source="claude" if is_ai_reason else "deterministic",
+        why_source=source if is_ai_reason else "deterministic",
         category=category,
         availability_source="Watchmode" if available_services else "not_confirmed",
     )

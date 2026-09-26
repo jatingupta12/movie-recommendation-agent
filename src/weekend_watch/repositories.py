@@ -51,6 +51,13 @@ class TitleRepository:
     def get(self, title_id: int) -> sqlite3.Row | None:
         return self.connection.execute("SELECT * FROM titles WHERE id = ?", (title_id,)).fetchone()
 
+    def update_identity_details(self, title_id: int, *, media_type: str, name: str) -> None:
+        self.connection.execute(
+            "UPDATE titles SET media_type = ?, name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (media_type, name, title_id),
+        )
+        self.connection.commit()
+
     def get_by_provider_external(self, provider: str, external_id: str | int) -> sqlite3.Row | None:
         return self.connection.execute(
             "SELECT * FROM titles WHERE provider = ? AND external_id = ?",
@@ -230,6 +237,17 @@ class WatchmodeRepository:
         )
         self.connection.commit()
 
+    def clear_availability_cache(self, title_id: int, region: str) -> None:
+        self.connection.execute(
+            "DELETE FROM streaming_availability WHERE title_id = ? AND region = ?",
+            (title_id, region.upper()),
+        )
+        self.connection.execute(
+            "DELETE FROM watchmode_availability_cache WHERE title_id = ? AND region = ?",
+            (title_id, region.upper()),
+        )
+        self.connection.commit()
+
     def get_cached_availability(self, title_id: int, region: str, ttl_hours: int | None):
         cache = self.connection.execute(
             "SELECT fetched_at FROM watchmode_availability_cache WHERE title_id = ? AND region = ?",
@@ -255,13 +273,19 @@ class WatchmodeRepository:
             "DELETE FROM streaming_availability WHERE title_id = ? AND region = ?",
             (title_id, region.upper()),
         )
+        unique: dict[tuple[str, str, str, str | None], Any] = {}
+        for item in availability:
+            unique[(item.provider, item.provider_type, region.upper(), item.web_url)] = item
         self.connection.executemany(
             """INSERT INTO streaming_availability
                (title_id, watchmode_id, provider, provider_type, region, available, web_url, price, fetched_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(title_id, provider, provider_type, region, web_url) DO UPDATE SET
+                 watchmode_id=excluded.watchmode_id, available=excluded.available,
+                 price=excluded.price, fetched_at=excluded.fetched_at""",
             [(title_id, watchmode_id, item.provider, item.provider_type, region.upper(),
               int(item.available), item.web_url, item.price, fetched_at)
-             for item in availability],
+             for item in unique.values()],
         )
         self.connection.execute(
             """INSERT INTO watchmode_availability_cache (title_id, region, fetched_at)
